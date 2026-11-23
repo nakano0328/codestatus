@@ -236,6 +236,10 @@ struct StatePersistenceTests {
         // Reviewed: a bool recording only whether an agent has ever sent us an
         // event for this session. Carries nothing about what was said.
         "hasHookEvidence",
+        // Reviewed (fork addition): a ChatGPT conversation's address, checked
+        // against ChatGPT's hosts on decode. An opaque conversation id, the same
+        // kind of metadata as a session id; nothing of what was said.
+        "conversationURL",
         // Reviewed and *excluded from the snapshot*: the name the agent gave
         // the session, which the model writes out of the conversation. It is
         // held in memory to label a row and is left out of `CodingKeys`, so it

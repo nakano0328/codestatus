@@ -6,6 +6,13 @@ public enum AgentProvider: String, Codable, Sendable, CaseIterable {
     case codex
     /// Reserved for future adapters; never produced by the V1 adapters.
     case generic
+    /// Fork addition: ChatGPT in the browser, reported by the ChatGPT Unread
+    /// extension through its native messaging host rather than by a hook.
+    ///
+    /// It has no process: the browser extension is the only witness to what
+    /// the conversation is doing, so every process-based check (reaping,
+    /// restore liveness, wake re-verification) has to leave it alone.
+    case chatGPT = "chatgpt"
 
     /// Name shown in the HUD and notifications.
     public var displayName: String {
@@ -13,7 +20,13 @@ public enum AgentProvider: String, Codable, Sendable, CaseIterable {
         case .claudeCode: return "Claude Code"
         case .codex: return "Codex"
         case .generic: return "Agent"
+        case .chatGPT: return "ChatGPT"
         }
+    }
+
+    /// Whether sessions of this provider are backed by a local process.
+    public var hasProcess: Bool {
+        self != .chatGPT
     }
 }
 
@@ -24,6 +37,8 @@ public enum HostApplication: String, Codable, Sendable {
     case iTerm
     case ghostty
     case warp
+    /// Fork addition: the browser a ChatGPT conversation lives in.
+    case chrome
     case unknown
 
     public var bundleIdentifier: String? {
@@ -33,6 +48,7 @@ public enum HostApplication: String, Codable, Sendable {
         case .iTerm: return "com.googlecode.iterm2"
         case .ghostty: return "com.mitchellh.ghostty"
         case .warp: return "dev.warp.Warp-Stable"
+        case .chrome: return "com.google.Chrome"
         case .unknown: return nil
         }
     }
@@ -44,6 +60,7 @@ public enum HostApplication: String, Codable, Sendable {
         case .iTerm: return "iTerm2"
         case .ghostty: return "Ghostty"
         case .warp: return "Warp"
+        case .chrome: return "Chrome"
         case .unknown: return "Unknown"
         }
     }

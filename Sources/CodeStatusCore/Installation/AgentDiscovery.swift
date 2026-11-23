@@ -169,7 +169,7 @@ public struct AgentDiscovery: Sendable {
                 // second prefix is there for a rename we do not control.
                 extensionPrefixes: ["openai.chatgpt", "openai.codex"]
             )
-        case .generic:
+        case .generic, .chatGPT:
             return Spec()
         }
     }

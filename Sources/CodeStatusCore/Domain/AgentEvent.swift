@@ -120,6 +120,14 @@ public struct AgentEvent: Sendable, Equatable {
     public let termProgram: String?
     public let termSessionID: String?
 
+    // ChatGPT only (fork addition). Never produced by the hook, whose scanner
+    // drops these keys; only the ChatGPT Unread native host sends them.
+    /// The conversation's address, already checked to be a ChatGPT URL.
+    public let conversationURL: String?
+    /// The conversation's name, as ChatGPT shows it in its sidebar. Held in
+    /// memory like ``AgentSession/sessionTitle`` and never persisted.
+    public let title: String?
+
     public init(
         id: EventID,
         provider: AgentProvider,
@@ -139,7 +147,9 @@ public struct AgentEvent: Sendable, Equatable {
         cwd: String? = nil,
         pid: pid_t? = nil,
         termProgram: String? = nil,
-        termSessionID: String? = nil
+        termSessionID: String? = nil,
+        conversationURL: String? = nil,
+        title: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -160,13 +170,16 @@ public struct AgentEvent: Sendable, Equatable {
         self.pid = pid
         self.termProgram = termProgram
         self.termSessionID = termSessionID
+        self.conversationURL = conversationURL
+        self.title = title
     }
 }
 
 public extension AgentEvent {
     /// Host application implied by `TERM_PROGRAM`, when the hook captured it.
+    /// A ChatGPT conversation has no terminal; it lives in the browser.
     var hostApplication: HostApplication {
-        HostApplication(termProgram: termProgram)
+        provider == .chatGPT ? .chrome : HostApplication(termProgram: termProgram)
     }
 
     /// Terminal events are applied unconditionally: a session that has ended

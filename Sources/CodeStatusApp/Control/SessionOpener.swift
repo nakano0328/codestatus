@@ -32,8 +32,38 @@ final class SessionOpener {
         case .iTerm, .ghostty, .warp:
             // Recognised hosts we can raise but cannot address a tab in yet.
             activate(bundleIdentifier: session.hostApplication.bundleIdentifier)
+        case .chrome:
+            openConversation(session)
         case .unknown:
             openWorkspaceFolder(session)
+        }
+    }
+
+    // MARK: - ChatGPT (fork addition)
+
+    /// Opens the conversation in Chrome, where the ChatGPT Unread extension
+    /// lives. The URL carries a `#codestatus` marker the extension looks for:
+    /// if the conversation is already open in a tab, it switches to that tab
+    /// and closes the one this just opened.
+    private func openConversation(_ session: AgentSession) {
+        // Checked again here, at the point of use: the stored value came over a
+        // socket, and this is the line that hands it to the system to open.
+        guard let string = EventWireDecoder.chatGPTURL(session.conversationURL),
+              let url = URL(string: string)
+        else {
+            activate(bundleIdentifier: HostApplication.chrome.bundleIdentifier)
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        if let bundleIdentifier = HostApplication.chrome.bundleIdentifier,
+           let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: configuration)
+        } else {
+            // No Chrome: the default browser still gets the user to the right
+            // conversation, just without the extension to reuse a tab.
+            NSWorkspace.shared.open(url)
         }
     }
 

@@ -223,6 +223,10 @@ public struct SessionRegistry: Sendable {
     public mutating func markAllReconnecting(now: Date) {
         for (id, var session) in sessions where session.state.isActive {
             guard session.state != .reconnecting else { continue }
+            // Nothing on this Mac can re-verify a ChatGPT conversation, so it
+            // would sit in `reconnecting` until the browser next spoke. Its
+            // state is the extension's own record, which a sleep does not lose.
+            guard session.provider.hasProcess else { continue }
             session.previousState = session.state
             session.state = .reconnecting
             session.stateConfidence = .low

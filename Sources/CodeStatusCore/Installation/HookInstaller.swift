@@ -157,6 +157,7 @@ public struct HookInstaller: Sendable {
         case .claudeCode: return "claude-code"
         case .codex: return "codex"
         case .generic: return "generic"
+        case .chatGPT: return "chatgpt"
         }
     }
 
@@ -175,7 +176,7 @@ public struct HookInstaller: Sendable {
     public var supportsAsyncHooks: Bool {
         switch provider {
         case .claudeCode: return true
-        case .codex, .generic: return false
+        case .codex, .generic, .chatGPT: return false
         }
     }
 

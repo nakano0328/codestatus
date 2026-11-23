@@ -96,6 +96,10 @@ public struct StatePersistence: Sendable {
         isStillAnAgent: (_ pid: pid_t) -> Bool = { _ in true }
     ) -> [AgentSession] {
         sessions.filter { session in
+            // A ChatGPT conversation has no process to check. It stays until the
+            // extension says it was read, which it will do whenever it learns
+            // that — a restart here does not change that it is still unread.
+            if !session.provider.hasProcess { return session.hasHookEvidence }
             guard let pid = session.pid, let startTime = session.processStartTime else { return false }
             guard isAlive(pid, startTime) else { return false }
             // Sessions an agent has actually reported on are kept regardless:

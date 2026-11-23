@@ -205,6 +205,12 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
     /// has to be correct stays on ``displayName``, which does not consult it.
     public var sessionTitle: String?
 
+    /// Fork addition: where a ChatGPT conversation lives, so a click can open
+    /// it. Checked against ChatGPT's hosts when decoded. Persisted: it is an
+    /// address with an opaque conversation id, the same kind of metadata as a
+    /// session id, and without it a restored row could not be opened.
+    public var conversationURL: String?
+
     // Host
     public var hostApplication: HostApplication
     public var hostBundleIdentifier: String?
@@ -244,6 +250,7 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
         case startedAt, lastEventAt
         case pid, parentPID, processStartTime, tty
         case cwd, gitRoot, repositoryName, workspaceName
+        case conversationURL
         case hostApplication, hostBundleIdentifier
         case sourceAdapter, capabilities, controlTarget, lastError
         case hasHookEvidence
@@ -304,7 +311,10 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
     /// it is what the row's actions act on — so it keeps the lead, at full
     /// weight, whether or not the agent has named anything.
     public var primaryLabel: String {
-        displayName
+        // A ChatGPT conversation has no location to lead with, and the meta
+        // line already says "ChatGPT", so its name takes the lead instead.
+        if provider == .chatGPT { return agentTitle ?? displayName }
+        return displayName
     }
 
     /// The agent's own name for the session, to sit beside the location.
@@ -318,7 +328,7 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
     /// `nil` when the agent has not named the session, so a row without a title
     /// renders exactly as it did before titles existed.
     public var secondaryLabel: String? {
-        agentTitle
+        provider == .chatGPT ? nil : agentTitle
     }
 
     /// A notification body, led by the agent's own name for the session.

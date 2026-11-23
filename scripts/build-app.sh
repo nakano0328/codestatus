@@ -65,7 +65,11 @@ rm -rf "$STAGE"; mkdir -p "$STAGE"
 for product in CodeStatusApp codestatus-hook; do
     slices=()
     for triple in "${TRIPLES[@]}"; do
-        swift build -c "$CONFIG" --triple "$triple" --product "$product"
+        # Fork addition: retried once. SwiftPM 6.3 from the Command Line Tools
+        # sometimes reports "No target named 'codestatus-hook-…'" on the first
+        # product after switching triples; the same command then succeeds.
+        swift build -c "$CONFIG" --triple "$triple" --product "$product" \
+            || swift build -c "$CONFIG" --triple "$triple" --product "$product"
         slices+=("$(swift build -c "$CONFIG" --triple "$triple" --show-bin-path)/$product")
     done
     lipo -create "${slices[@]}" -output "$STAGE/$product"

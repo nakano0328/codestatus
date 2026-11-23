@@ -227,8 +227,11 @@ public final class NotificationCoordinator {
         case .free:
             // Only interesting as the end of actual work.
             guard transition.from == .busy else { return nil }
+            // A ChatGPT conversation has no project to be "in"; the body's
+            // conversation name already says which one finished.
+            let finished = session.provider == .chatGPT ? "\(agent) finished" : "\(agent) finished in \(project)"
             return Content(
-                title: "\(agent) finished in \(project)",
+                title: finished,
                 body: session.announcement("Ready for another prompt."),
                 tone: .completion
             )

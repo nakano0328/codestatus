@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch provider {
             case .claudeCode: installed = (try? ClaudeHookInstaller(paths: paths).isInstalled()) ?? false
             case .codex: installed = (try? CodexHookInstaller(paths: paths).isInstalled()) ?? false
-            case .generic: continue
+            case .generic, .chatGPT: continue
             }
             if !installed { unconnected.append(provider.displayName) }
         }

@@ -99,7 +99,7 @@ public final class SessionTitleReader {
             return desktopTitle(sessionID: sessionID) ?? claudeTitle(sessionID: sessionID)
         case .codex:
             return codexTitle(sessionID: sessionID)
-        case .generic:
+        case .generic, .chatGPT:
             return nil
         }
     }

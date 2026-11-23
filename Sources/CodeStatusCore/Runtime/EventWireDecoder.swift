@@ -63,6 +63,12 @@ public enum EventWireDecoder {
 
         let pid = (object["ppid"] as? Int).map { pid_t($0) }
 
+        // The ChatGPT fields are read for ChatGPT alone, so nothing that merely
+        // claims another provider can smuggle a URL or a label in through them.
+        let isChatGPT = provider == .chatGPT
+        let conversationURL = isChatGPT ? chatGPTURL(object["conversation_url"]) : nil
+        let title = isChatGPT ? chatGPTTitle(object["title"]) : nil
+
         return AgentEvent(
             id: EventID(id),
             provider: provider,
@@ -82,13 +88,40 @@ public enum EventWireDecoder {
             cwd: nonEmpty(object["cwd"]),
             pid: pid,
             termProgram: nonEmpty(object["term_program"]),
-            termSessionID: nonEmpty(object["term_session_id"])
+            termSessionID: nonEmpty(object["term_session_id"]),
+            conversationURL: conversationURL,
+            title: title
         )
     }
 
     private static func nonEmpty(_ value: Any?) -> String? {
         guard let string = value as? String, !string.isEmpty else { return nil }
         return string
+    }
+
+    /// Hosts a ChatGPT conversation can live on. The socket is reachable by
+    /// anything running as this user, and a click opens whatever URL a session
+    /// holds, so only these are accepted — never an arbitrary address.
+    public static let chatGPTHosts: Set<String> = ["chatgpt.com", "chat.openai.com"]
+
+    public static func chatGPTURL(_ value: Any?) -> String? {
+        guard let string = nonEmpty(value),
+              let components = URLComponents(string: string),
+              components.scheme == "https",
+              let host = components.host, chatGPTHosts.contains(host)
+        else { return nil }
+        return string
+    }
+
+    /// Long enough for any sidebar title, short enough that a hostile sender
+    /// cannot balloon the HUD or memory with one.
+    static let chatGPTTitleLimit = 200
+
+    static func chatGPTTitle(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let collapsed = string.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !collapsed.isEmpty else { return nil }
+        return String(collapsed.prefix(chatGPTTitleLimit))
     }
 
     /// Splits a stream buffer into complete newline-delimited lines, returning

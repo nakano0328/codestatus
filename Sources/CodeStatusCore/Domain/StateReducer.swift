@@ -199,6 +199,10 @@ public enum StateReducer {
         if let value = event.providerTurnID { session.providerTurnID = value }
         if let value = event.cwd, !value.isEmpty { session.cwd = value }
         if let value = event.pid { session.pid = value }
+        // ChatGPT names its conversation a moment after the first answer, so a
+        // later event carrying a new title is the rename arriving.
+        if let value = event.conversationURL { session.conversationURL = value }
+        if let value = event.title { session.sessionTitle = value }
 
         let host = event.hostApplication
         if host != .unknown {

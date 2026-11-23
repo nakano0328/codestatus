@@ -340,7 +340,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: return try ClaudeHookInstaller(paths: paths).planInstall()
         case .codex: return try CodexHookInstaller(paths: paths).planInstall()
-        case .generic: throw CocoaError(.featureUnsupported)
+        case .generic, .chatGPT: throw CocoaError(.featureUnsupported)
         }
     }
 
@@ -348,7 +348,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: _ = try ClaudeHookInstaller(paths: paths).install()
         case .codex: _ = try CodexHookInstaller(paths: paths).install()
-        case .generic: break
+        case .generic, .chatGPT: break
         }
     }
 
@@ -356,7 +356,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: return try ClaudeHookInstaller(paths: paths).isInstalled()
         case .codex: return try CodexHookInstaller(paths: paths).isInstalled()
-        case .generic: return false
+        case .generic, .chatGPT: return false
         }
     }
 
@@ -364,7 +364,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: return try ClaudeHookInstaller(paths: paths).needsMigration()
         case .codex: return try CodexHookInstaller(paths: paths).needsMigration()
-        case .generic: return false
+        case .generic, .chatGPT: return false
         }
     }
 
@@ -372,7 +372,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: return ClaudeHookInstaller(paths: paths).settingsURL.path
         case .codex: return CodexHookInstaller(paths: paths).hooksURL.path
-        case .generic: return ""
+        case .generic, .chatGPT: return ""
         }
     }
 
@@ -380,7 +380,7 @@ final class OnboardingModel {
         switch provider {
         case .claudeCode: return ClaudeHookInstaller.events.count
         case .codex: return CodexHookInstaller.events.count
-        case .generic: return 0
+        case .generic, .chatGPT: return 0
         }
     }
 }
