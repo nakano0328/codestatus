@@ -56,7 +56,7 @@ public struct SessionRegistry: Sendable {
     /// — see ``unreported``.
     public var visible: [AgentSession] {
         sessions.values
-            .filter { $0.state.isActive && $0.hasHookEvidence }
+            .filter(\.isListed)
             .sorted { lhs, rhs in
                 let l = displayPriority(lhs.state), r = displayPriority(rhs.state)
                 if l != r { return l > r }
@@ -105,7 +105,7 @@ public struct SessionRegistry: Sendable {
     /// is the one thing these counters must never be.
     public func counts() -> [StateBucket: Int] {
         var result: [StateBucket: Int] = [:]
-        for session in sessions.values where session.state.isActive && session.hasHookEvidence {
+        for session in sessions.values where session.isListed {
             result[session.state.bucket, default: 0] += 1
         }
         return result
@@ -122,10 +122,38 @@ public struct SessionRegistry: Sendable {
             return [.eventDropped(event.id, .duplicate)]
         }
 
+        // A process exit concerns every session on that process, not only the
+        // one the pid index last pointed at. Process discovery and the hook key
+        // the same agent twice (see ``unreported``), and routing the exit to one
+        // of them left the other active forever: the reaper found its process
+        // gone every ten seconds and its exit was dropped as a duplicate each
+        // time after the first.
+        if event.kind == .processExited, event.providerSessionID == nil, let pid = event.pid {
+            var ids = Set(sessions.values.filter { $0.pid == pid && $0.state.isActive }.map(\.id))
+            if let indexed = pidIndex[pid], sessions[indexed] != nil { ids.insert(indexed) }
+            guard !ids.isEmpty else { return [.eventDropped(event.id, .unroutable)] }
+            return ids.sorted { $0.rawValue < $1.rawValue }.flatMap { apply(event, to: $0) }
+        }
+
         guard let id = resolveSessionID(for: event) else {
             return [.eventDropped(event.id, .unroutable)]
         }
+        return retireLegacyDesktopRow(for: event, keeping: id) + apply(event, to: id)
+    }
 
+    /// Before the fork keyed desktop sessions on the app's own id, they were
+    /// keyed on the agent's session id like any other. A row saved that way
+    /// would sit beside the new one forever, since nothing routes to it now.
+    private mutating func retireLegacyDesktopRow(for event: AgentEvent, keeping id: SessionID) -> [RegistryEvent] {
+        guard event.isFromClaudeDesktop,
+              let agentSessionID = event.providerSessionID, !agentSessionID.isEmpty
+        else { return [] }
+        let legacy = SessionID.provider(event.provider, agentSessionID)
+        guard legacy != id, sessions[legacy] != nil else { return [] }
+        return remove(legacy)
+    }
+
+    private mutating func apply(_ event: AgentEvent, to id: SessionID) -> [RegistryEvent] {
         var results: [RegistryEvent] = []
         var session: AgentSession
         if let existing = sessions[id] {
@@ -150,6 +178,12 @@ public struct SessionRegistry: Sendable {
         let reduction = StateReducer.reduce(session, applying: event)
         sessions[id] = reduction.session
         indexPID(for: reduction.session)
+        // A paused desktop session has let go of its process. Leaving the index
+        // pointing at it would route a recycled pid's exit here.
+        if session.pid != nil, reduction.session.pid == nil,
+           let pid = session.pid, pidIndex[pid] == id {
+            pidIndex.removeValue(forKey: pid)
+        }
 
         switch reduction.outcome {
         case .stateChanged(let transition):
@@ -167,6 +201,12 @@ public struct SessionRegistry: Sendable {
     }
 
     private func resolveSessionID(for event: AgentEvent) -> SessionID? {
+        // Fork addition: the desktop app's own id outlives every process and
+        // every agent session id one desktop session goes through: its warm
+        // spare, each resume, and `/clear`.
+        if event.isFromClaudeDesktop, let hostSessionID = event.hostSessionID {
+            return SessionID.provider(event.provider, hostSessionID)
+        }
         // Preferred: the agent's own session id, which survives pid reuse and
         // is stable across tabs, windows, and resumes.
         if let providerSessionID = event.providerSessionID, !providerSessionID.isEmpty {
@@ -226,7 +266,10 @@ public struct SessionRegistry: Sendable {
             // Nothing on this Mac can re-verify a ChatGPT conversation, so it
             // would sit in `reconnecting` until the browser next spoke. Its
             // state is the extension's own record, which a sleep does not lose.
-            guard session.provider.hasProcess else { continue }
+            guard session.hasLocalProcess else { continue }
+            // A paused desktop session has no process to re-verify either; the
+            // desktop app's own record decides whether it stays.
+            guard !session.isPausedDesktopSession else { continue }
             session.previousState = session.state
             session.state = .reconnecting
             session.stateConfidence = .low
@@ -254,6 +297,86 @@ public struct SessionRegistry: Sendable {
         guard sessions[session.id] != nil else { return }
         sessions[session.id] = session
         indexPID(for: session)
+    }
+
+    /// Fork addition: makes the cloud rows match what the desktop app's cache
+    /// lists, adding, updating and removing them.
+    ///
+    /// Pass only the sessions worth a row (see
+    /// ``CloudSessionReader/Session/isWorthListing``); every cloud row not in
+    /// the list is removed. A state change becomes a ``Transition`` like any
+    /// other, so finishing in the cloud notifies like finishing in a terminal.
+    /// Its id is derived from the session and its update time, so the same
+    /// change seen on two sweeps is announced once.
+    public mutating func syncCloudSessions(_ listed: [CloudSessionReader.Session], now: Date) -> [RegistryEvent] {
+        var results: [RegistryEvent] = []
+        var keep: Set<SessionID> = []
+
+        for cloud in listed {
+            let id = SessionID.provider(.claudeCode, cloud.id)
+            keep.insert(id)
+            var session: AgentSession
+            if let existing = sessions[id] {
+                session = existing
+            } else {
+                session = AgentSession(
+                    id: id, provider: .claudeCode, state: .discovering,
+                    now: cloud.updatedAt ?? now, sourceAdapter: "claudeDesktopCache"
+                )
+                session.hostApplication = .claudeCloud
+                session.controlTarget.hostApplication = .claudeCloud
+                session.hostSessionID = cloud.id
+                session.capabilities = [.canOpen, .canIdentifyExactConversation]
+                session.hasHookEvidence = true
+                session.stateConfidence = .medium
+                results.append(.sessionAdded(id))
+            }
+
+            let before = session
+            session.sessionTitle = cloud.title
+            session.repositoryName = cloud.repository.map { ($0 as NSString).lastPathComponent }
+            session.workspaceName = cloud.repository
+            if let updated = cloud.updatedAt { session.lastEventAt = updated }
+
+            if cloud.state != session.state {
+                let at = cloud.updatedAt ?? now
+                let transition = Transition(
+                    sessionID: id,
+                    from: session.state,
+                    to: cloud.state,
+                    eventID: EventID("cloud-\(cloud.id)-\(Int(at.timeIntervalSince1970 * 1000))-\(cloud.state.rawValue)"),
+                    source: .reconciliation,
+                    confidence: .medium,
+                    occurredAt: at,
+                    reason: "Claude desktop app's list of cloud sessions"
+                )
+                session.previousState = session.state
+                session.state = cloud.state
+                session.stateChangedAt = at
+                sessions[id] = session
+                // A row's first state is where it starts, not news.
+                if before.state != .discovering { results.append(.sessionChanged(transition)) }
+            } else if session != before {
+                sessions[id] = session
+                results.append(.sessionRefreshed(id))
+            }
+        }
+
+        for (id, session) in sessions where session.isCloudSession && !keep.contains(id) {
+            results += remove(id)
+        }
+        return results
+    }
+
+    /// Puts back sessions saved before a restart.
+    ///
+    /// ``update(_:)`` only replaces sessions that already exist, so restoring
+    /// through it put nothing back at all (fork fix).
+    public mutating func restore(_ restored: [AgentSession]) {
+        for session in restored where sessions[session.id] == nil {
+            sessions[session.id] = session
+            indexPID(for: session)
+        }
     }
 
     /// Drops one session immediately, without waiting for it to end and linger.

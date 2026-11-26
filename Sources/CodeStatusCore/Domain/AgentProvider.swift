@@ -39,6 +39,12 @@ public enum HostApplication: String, Codable, Sendable {
     case warp
     /// Fork addition: the browser a ChatGPT conversation lives in.
     case chrome
+    /// Fork addition: the Claude desktop app, which runs Claude Code sessions
+    /// itself rather than in a terminal.
+    case claudeDesktop
+    /// Fork addition: a Claude Code session running in the cloud, seen through
+    /// the desktop app's cache. It has no process on this Mac.
+    case claudeCloud
     case unknown
 
     public var bundleIdentifier: String? {
@@ -49,6 +55,8 @@ public enum HostApplication: String, Codable, Sendable {
         case .ghostty: return "com.mitchellh.ghostty"
         case .warp: return "dev.warp.Warp-Stable"
         case .chrome: return "com.google.Chrome"
+        case .claudeDesktop: return "com.anthropic.claudefordesktop"
+        case .claudeCloud: return nil
         case .unknown: return nil
         }
     }
@@ -61,6 +69,8 @@ public enum HostApplication: String, Codable, Sendable {
         case .ghostty: return "Ghostty"
         case .warp: return "Warp"
         case .chrome: return "Chrome"
+        case .claudeDesktop: return "Claude"
+        case .claudeCloud: return "Cloud"
         case .unknown: return "Unknown"
         }
     }

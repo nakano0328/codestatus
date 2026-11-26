@@ -16,6 +16,14 @@ public struct EventEnvelope {
     public var parentPID: Int
     public var termProgram: [UInt8]?
     public var termSessionID: [UInt8]?
+    /// Fork addition: `CLAUDE_CODE_ENTRYPOINT`, which says what launched the
+    /// agent (`cli`, `claude-desktop`, ...). The only way to tell a session the
+    /// Claude desktop app runs from one in a terminal: it has no TERM_PROGRAM.
+    public var entrypoint: [UInt8]?
+    /// Fork addition: `CLAUDE_CODE_HOST_SESSION_ID`, the desktop app's own id
+    /// for the session (`local_...`). Stable across the processes the app
+    /// starts and stops for one session, which the agent's session id is not.
+    public var hostSessionID: [UInt8]?
 
     public init(
         version: Int = 1,
@@ -25,7 +33,9 @@ public struct EventEnvelope {
         timestampMicroseconds: Int,
         parentPID: Int,
         termProgram: [UInt8]? = nil,
-        termSessionID: [UInt8]? = nil
+        termSessionID: [UInt8]? = nil,
+        entrypoint: [UInt8]? = nil,
+        hostSessionID: [UInt8]? = nil
     ) {
         self.version = version
         self.provider = provider
@@ -35,6 +45,8 @@ public struct EventEnvelope {
         self.parentPID = parentPID
         self.termProgram = termProgram
         self.termSessionID = termSessionID
+        self.entrypoint = entrypoint
+        self.hostSessionID = hostSessionID
     }
 }
 
@@ -87,6 +99,15 @@ public func buildEventLine(
     }
     if let value = envelope.termSessionID, !value.isEmpty {
         appendKey("term_session_id", into: &out)
+        appendJSONString(value, to: &out)
+    }
+
+    if let value = envelope.entrypoint, !value.isEmpty {
+        appendKey("entrypoint", into: &out)
+        appendJSONString(value, to: &out)
+    }
+    if let value = envelope.hostSessionID, !value.isEmpty {
+        appendKey("host_session_id", into: &out)
         appendJSONString(value, to: &out)
     }
 

@@ -34,9 +34,37 @@ final class SessionOpener {
             activate(bundleIdentifier: session.hostApplication.bundleIdentifier)
         case .chrome:
             openConversation(session)
+        case .claudeDesktop:
+            openDesktopSession(session)
+        case .claudeCloud:
+            openCloudSession(session)
         case .unknown:
             openWorkspaceFolder(session)
         }
+    }
+
+    // MARK: - Claude desktop app (fork addition)
+
+    /// Opens the session in the Claude desktop app, through the same
+    /// `claude://code/continue?session=` link the app's own Dock menu uses. A
+    /// paused session is resumed by the app when it opens.
+    private func openDesktopSession(_ session: AgentSession) {
+        guard let hostSessionID = session.hostSessionID,
+              let url = ClaudeDesktop.continueURL(hostSessionID: hostSessionID)
+        else {
+            activate(bundleIdentifier: HostApplication.claudeDesktop.bundleIdentifier)
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Opens a cloud session in the desktop app, which shows cloud sessions in
+    /// the same sidebar, or on claude.ai when the app is not installed.
+    private func openCloudSession(_ session: AgentSession) {
+        guard let id = session.hostSessionID, let urls = CloudSessionReader.openURLs(for: id) else { return }
+        let hasApp = HostApplication.claudeDesktop.bundleIdentifier
+            .flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) } != nil
+        NSWorkspace.shared.open(hasApp ? urls.app : urls.web)
     }
 
     // MARK: - ChatGPT (fork addition)

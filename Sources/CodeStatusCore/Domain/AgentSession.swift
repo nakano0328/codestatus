@@ -211,6 +211,12 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
     /// session id, and without it a restored row could not be opened.
     public var conversationURL: String?
 
+    /// Fork addition: the hosting app's id for the session: the Claude desktop
+    /// app's `local_...`, or claude.ai/code's `session_...` for a cloud session.
+    /// Persisted for the same reason as ``conversationURL``: a restored row
+    /// needs it to be opened, and to check whether it was read.
+    public var hostSessionID: String?
+
     // Host
     public var hostApplication: HostApplication
     public var hostBundleIdentifier: String?
@@ -250,7 +256,7 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
         case startedAt, lastEventAt
         case pid, parentPID, processStartTime, tty
         case cwd, gitRoot, repositoryName, workspaceName
-        case conversationURL
+        case conversationURL, hostSessionID
         case hostApplication, hostBundleIdentifier
         case sourceAdapter, capabilities, controlTarget, lastError
         case hasHookEvidence
@@ -278,6 +284,39 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
         self.capabilities = []
         self.controlTarget = ControlTarget()
         self.clock = LogicalClock()
+    }
+
+    /// Fork addition: a session the Claude desktop app runs. See ``ClaudeDesktop``.
+    public var isDesktopSession: Bool {
+        hostApplication == .claudeDesktop && hostSessionID != nil
+    }
+
+    /// A desktop session whose process the app has stopped. It is still open
+    /// in the app and is resumed the next time someone opens it.
+    public var isPausedDesktopSession: Bool {
+        isDesktopSession && pid == nil
+    }
+
+    /// Whether a process on this Mac stands behind the session, so process
+    /// checks (reaping, wake re-verification, the wake lock) apply to it.
+    public var hasLocalProcess: Bool {
+        provider.hasProcess && hostApplication != .claudeCloud
+    }
+
+    /// Fork addition: a cloud session, mirrored from the desktop app's cache.
+    public var isCloudSession: Bool {
+        hostApplication == .claudeCloud
+    }
+
+    /// Whether the HUD lists this session and counts it: active, reported on
+    /// by an agent, and not the desktop app's unclaimed spare.
+    public var isListed: Bool {
+        state.isActive && hasHookEvidence && !isDesktopSpare
+    }
+
+    /// The desktop app's warm spare, before anyone has claimed it.
+    public var isDesktopSpare: Bool {
+        ClaudeDesktop.isSpareDirectory(cwd)
     }
 
     /// Best available human label for the session: repo, then workspace, then

@@ -134,7 +134,7 @@ public struct WakeLockPolicy: Sendable {
             // ChatGPT generates on OpenAI's servers, not on this Mac, so it never
             // needs the Mac kept awake. And a browser that quit mid-answer would
             // otherwise leave a `busy` row holding the lock until someone noticed.
-            guard session.provider.hasProcess else { return false }
+            guard session.hasLocalProcess else { return false }
             switch session.state {
             case .busy:
                 return true

@@ -154,6 +154,12 @@ public enum StateReducer {
             return Reduction(session: session, outcome: .ignoredEnded)
         }
 
+        // Fork addition: the desktop app stops a session's process without the
+        // session ending. See ``ClaudeDesktop``.
+        if event.isTerminal, session.isDesktopSession || event.isFromClaudeDesktop {
+            return pauseDesktopSession(session, by: event)
+        }
+
         guard let target = targetState(for: event) else {
             return Reduction(session: session, outcome: .ignoredUnmapped)
         }
@@ -192,6 +198,47 @@ public enum StateReducer {
         return Reduction(session: updated, outcome: .stateChanged(transition))
     }
 
+    /// Detaches a desktop session from the process the app just stopped.
+    ///
+    /// Nothing runs any more, so a turn that was in flight is over; the app
+    /// resumes the session idle the next time it is opened. The clock starts
+    /// again because the next process is a new timeline: its `SessionStart`
+    /// would otherwise lose to the `SessionEnd` that came before it.
+    ///
+    /// The transition is recorded as process-sourced: it is the app's doing,
+    /// not the agent finishing, and must not be announced as "finished".
+    private static func pauseDesktopSession(_ session: AgentSession, by event: AgentEvent) -> Reduction {
+        var updated = session
+        if event.source == .hook { applyEnrichment(from: event, to: &updated) }
+        updated.pid = nil
+        updated.parentPID = nil
+        updated.processStartTime = nil
+        updated.tty = nil
+        updated.controlTarget.tty = nil
+        updated.clock = LogicalClock()
+        updated.lastEventAt = event.timestamp
+
+        let target: AgentState = session.state == .failed ? .failed : .free
+        guard target != session.state else {
+            return Reduction(session: updated, outcome: .refreshed)
+        }
+        updated.previousState = session.state
+        updated.state = target
+        updated.stateChangedAt = event.timestamp
+        updated.stateConfidence = .medium
+        let transition = Transition(
+            sessionID: session.id,
+            from: session.state,
+            to: target,
+            eventID: event.id,
+            source: .process,
+            confidence: .medium,
+            occurredAt: event.timestamp,
+            reason: "Paused by the Claude desktop app"
+        )
+        return Reduction(session: updated, outcome: .stateChanged(transition))
+    }
+
     /// Copies metadata an event carries onto the session, without ever
     /// overwriting a known value with a missing one.
     private static func applyEnrichment(from event: AgentEvent, to session: inout AgentSession) {
@@ -203,6 +250,7 @@ public enum StateReducer {
         // later event carrying a new title is the rename arriving.
         if let value = event.conversationURL { session.conversationURL = value }
         if let value = event.title { session.sessionTitle = value }
+        if let value = event.hostSessionID { session.hostSessionID = value }
 
         let host = event.hostApplication
         if host != .unknown {

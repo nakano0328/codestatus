@@ -69,6 +69,14 @@ public enum EventWireDecoder {
         let conversationURL = isChatGPT ? chatGPTURL(object["conversation_url"]) : nil
         let title = isChatGPT ? chatGPTTitle(object["title"]) : nil
 
+        // Read for Claude Code alone, and only in the shapes the agent writes
+        // them: the host session id ends up in a deep link and a file path.
+        let isClaudeCode = provider == .claudeCode
+        let entrypoint = isClaudeCode ? Self.entrypoint(object["entrypoint"]) : nil
+        let hostSessionID = isClaudeCode
+            ? nonEmpty(object["host_session_id"]).flatMap { ClaudeDesktop.isValidHostSessionID($0) ? $0 : nil }
+            : nil
+
         return AgentEvent(
             id: EventID(id),
             provider: provider,
@@ -89,6 +97,8 @@ public enum EventWireDecoder {
             pid: pid,
             termProgram: nonEmpty(object["term_program"]),
             termSessionID: nonEmpty(object["term_session_id"]),
+            entrypoint: entrypoint,
+            hostSessionID: hostSessionID,
             conversationURL: conversationURL,
             title: title
         )
@@ -96,6 +106,14 @@ public enum EventWireDecoder {
 
     private static func nonEmpty(_ value: Any?) -> String? {
         guard let string = value as? String, !string.isEmpty else { return nil }
+        return string
+    }
+
+    /// `cli`, `claude-desktop`, `sdk-ts` and the like: short lowercase tokens.
+    static func entrypoint(_ value: Any?) -> String? {
+        guard let string = nonEmpty(value), string.count <= 32,
+              string.allSatisfy({ $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-") })
+        else { return nil }
         return string
     }
 

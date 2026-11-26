@@ -119,6 +119,11 @@ public struct AgentEvent: Sendable, Equatable {
     public let pid: pid_t?
     public let termProgram: String?
     public let termSessionID: String?
+    /// Fork addition: what launched the agent, from `CLAUDE_CODE_ENTRYPOINT`.
+    public let entrypoint: String?
+    /// Fork addition: the Claude desktop app's id for the session
+    /// (`local_...`), from `CLAUDE_CODE_HOST_SESSION_ID`.
+    public let hostSessionID: String?
 
     // ChatGPT only (fork addition). Never produced by the hook, whose scanner
     // drops these keys; only the ChatGPT Unread native host sends them.
@@ -148,6 +153,8 @@ public struct AgentEvent: Sendable, Equatable {
         pid: pid_t? = nil,
         termProgram: String? = nil,
         termSessionID: String? = nil,
+        entrypoint: String? = nil,
+        hostSessionID: String? = nil,
         conversationURL: String? = nil,
         title: String? = nil
     ) {
@@ -170,6 +177,8 @@ public struct AgentEvent: Sendable, Equatable {
         self.pid = pid
         self.termProgram = termProgram
         self.termSessionID = termSessionID
+        self.entrypoint = entrypoint
+        self.hostSessionID = hostSessionID
         self.conversationURL = conversationURL
         self.title = title
     }
@@ -179,7 +188,17 @@ public extension AgentEvent {
     /// Host application implied by `TERM_PROGRAM`, when the hook captured it.
     /// A ChatGPT conversation has no terminal; it lives in the browser.
     var hostApplication: HostApplication {
-        provider == .chatGPT ? .chrome : HostApplication(termProgram: termProgram)
+        if provider == .chatGPT { return .chrome }
+        // The desktop app exports no TERM_PROGRAM, so without this its sessions
+        // read as hosted by nothing at all.
+        if isFromClaudeDesktop { return .claudeDesktop }
+        return HostApplication(termProgram: termProgram)
+    }
+
+    /// Whether the Claude desktop app is running this session. Both values are
+    /// needed: the id is what lets a row outlive the process the app stops.
+    var isFromClaudeDesktop: Bool {
+        provider == .claudeCode && entrypoint == ClaudeDesktop.entrypoint && hostSessionID != nil
     }
 
     /// Terminal events are applied unconditionally: a session that has ended

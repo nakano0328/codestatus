@@ -240,6 +240,9 @@ struct StatePersistenceTests {
         // against ChatGPT's hosts on decode. An opaque conversation id, the same
         // kind of metadata as a session id; nothing of what was said.
         "conversationURL",
+        // Reviewed (fork addition): the Claude desktop app's id for a session,
+        // `local_` plus a uuid, checked on decode. Metadata like a session id.
+        "hostSessionID",
         // Reviewed and *excluded from the snapshot*: the name the agent gave
         // the session, which the model writes out of the conversation. It is
         // held in memory to label a row and is left out of `CodingKeys`, so it

@@ -100,6 +100,13 @@ public struct StatePersistence: Sendable {
             // extension says it was read, which it will do whenever it learns
             // that — a restart here does not change that it is still unread.
             if !session.provider.hasProcess { return session.hasHookEvidence }
+            // Cloud rows are rebuilt from the desktop app's cache on the first
+            // sweep; a saved copy could only be staler than that.
+            if session.isCloudSession { return false }
+            // A desktop session outlives its process (fork addition). If the
+            // process went while we were down, the reaper pauses the row, and
+            // the desktop app's record decides whether it stays.
+            if session.isDesktopSession { return session.hasHookEvidence }
             guard let pid = session.pid, let startTime = session.processStartTime else { return false }
             guard isAlive(pid, startTime) else { return false }
             // Sessions an agent has actually reported on are kept regardless:

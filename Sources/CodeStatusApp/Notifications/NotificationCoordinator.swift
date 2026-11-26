@@ -227,6 +227,9 @@ public final class NotificationCoordinator {
         case .free:
             // Only interesting as the end of actual work.
             guard transition.from == .busy else { return nil }
+            // The Claude desktop app stopping a session's process is not the
+            // agent finishing (fork addition).
+            guard transition.source != .process else { return nil }
             // A ChatGPT conversation has no project to be "in"; the body's
             // conversation name already says which one finished.
             let finished = session.provider == .chatGPT ? "\(agent) finished" : "\(agent) finished in \(project)"

@@ -83,6 +83,20 @@ final class SessionDaemon {
     /// needs `paths`, which is not available until `init` has run.
     private lazy var titleReader = SessionTitleReader(home: paths.home)
 
+    /// Fork addition: the Claude desktop app's record of its sessions, which
+    /// decides how long a paused desktop row stays.
+    private lazy var desktopReader = DesktopSessionReader(home: paths.home)
+
+    /// Fork addition: cloud sessions, as the desktop app's cache lists them.
+    private lazy var cloudReader = CloudSessionReader(home: paths.home)
+
+    /// Cloud rows the user dismissed, with the update they were dismissed at.
+    /// A later update brings the row back: that is the session moving again.
+    private var dismissedCloud: [SessionID: Date] = [:]
+    private let cloudQueue = DispatchQueue(label: "co.codestatus.cloud-cache", qos: .utility)
+    private var isReadingCloudCache = false
+    private var lastCloudCount = -1
+
     /// Seconds between liveness sweeps of the registry.
     ///
     /// A backstop, not the mechanism: `EVFILT_PROC` reports an exit the instant
@@ -312,6 +326,78 @@ final class SessionDaemon {
         }
     }
 
+    /// Lets go of paused desktop sessions the user has caught up on.
+    ///
+    /// The desktop app stops a session's process on its own, and a stopped
+    /// process is not the session ending, so the row stays. But only while
+    /// there is something to come back for: once the app says the last turn
+    /// was seen, or the session was archived or deleted, a paused row is the
+    /// same as a closed terminal tab. An unreadable record keeps the row,
+    /// because "we could not tell" is not "it was read".
+    private func dropReadDesktopSessions() {
+        var results: [RegistryEvent] = []
+        for session in registry.all where session.isPausedDesktopSession && session.state.isActive {
+            guard let hostSessionID = session.hostSessionID else { continue }
+            switch desktopReader.lookup(hostSessionID: hostSessionID) {
+            case .found(let record) where record.isUnread:
+                continue
+            case .unreadable:
+                continue
+            case .found, .missing:
+                results += registry.remove(session.id)
+            }
+        }
+        handle(results)
+    }
+
+    /// Mirrors the cloud sessions the desktop app knows about.
+    ///
+    /// Only while the app is running: it is the only thing that refreshes the
+    /// cache, so with it closed every row would be a guess about the past. A
+    /// cache that cannot be read changes nothing this sweep.
+    ///
+    /// The cache is read off the main thread: when it has changed, decoding it
+    /// is the most expensive thing the sweep does.
+    private func syncCloudSessions() {
+        guard isClaudeDesktopRunning else {
+            handle(registry.syncCloudSessions([], now: Date()))
+            return
+        }
+        guard !isReadingCloudCache else { return }
+        isReadingCloudCache = true
+        let reader = cloudReader
+        cloudQueue.async { [weak self] in
+            let snapshot = reader.read()
+            Task { @MainActor in self?.applyCloudSnapshot(snapshot) }
+        }
+    }
+
+    private func applyCloudSnapshot(_ snapshot: CloudSessionReader.Snapshot?) {
+        isReadingCloudCache = false
+        guard let snapshot, isClaudeDesktopRunning else { return }
+        let listed = snapshot.sessions.filter { session in
+            guard session.isWorthListing else { return false }
+            let id = SessionID.provider(.claudeCode, session.id)
+            guard let dismissedAt = dismissedCloud[id] else { return true }
+            if let updated = session.updatedAt, updated > dismissedAt {
+                dismissedCloud.removeValue(forKey: id)
+                return true
+            }
+            return false
+        }
+        if listed.count != lastCloudCount {
+            // Counts only: the titles are the user's.
+            logger.info("cloud sessions: \(listed.count, privacy: .public) listed of \(snapshot.sessions.count, privacy: .public) in the desktop app's cache")
+            lastCloudCount = listed.count
+        }
+        handle(registry.syncCloudSessions(listed, now: Date()))
+    }
+
+    private var isClaudeDesktopRunning: Bool {
+        guard let bundleIdentifier = HostApplication.claudeDesktop.bundleIdentifier else { return false }
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).isEmpty
+    }
+
     /// Removes a session because the user asked us to stop watching it.
     ///
     /// Suppressed from process discovery afterwards, or the next sweep would
@@ -319,6 +405,7 @@ final class SessionDaemon {
     /// session demonstrably alive and talking to us, and continuing to hide it
     /// would be the same dishonesty as showing a phantom.
     func dismiss(_ session: AgentSession) {
+        if session.isCloudSession { dismissedCloud[session.id] = session.lastEventAt }
         dismissed.insert(session.id)
         handle(registry.remove(session.id))
         publish()
@@ -349,18 +436,23 @@ final class SessionDaemon {
             switch result {
             case .sessionAdded(let id):
                 changed = true
-                if let session = registry[id], let pid = session.pid { enrich(pid: pid) }
+                if let session = registry[id], let pid = session.pid { enrich(pid: pid, id: id) }
 
             case .sessionChanged(let transition):
                 changed = true
                 guard let session = registry[transition.sessionID] else { continue }
+                enrichIfResumed(session)
                 // The stale filter is what prevents a wake from firing a burst
                 // of notifications for turns that finished hours ago.
                 if sleepWake.shouldNotify(for: transition, now: Date()) {
                     notifications.handle(transition, session: session)
                 }
 
-            case .sessionRefreshed, .sessionRemoved:
+            case .sessionRefreshed(let id):
+                changed = true
+                if let session = registry[id] { enrichIfResumed(session) }
+
+            case .sessionRemoved:
                 changed = true
 
             case .eventDropped(let id, let reason):
@@ -376,7 +468,22 @@ final class SessionDaemon {
     /// Also the point where we start watching the process, because this is the
     /// moment we learn its start time — and a session is only safely watchable
     /// once we can tell its process from a recycled pid.
-    private func enrich(pid: pid_t) {
+    /// A paused desktop session picks up a new process when the app resumes
+    /// it, and that process has to be inspected and watched like a new one
+    /// (fork addition). Its start time is what says it has not been yet.
+    ///
+    /// The same goes for a spare the app has just handed to a new session: it
+    /// was inspected while it still sat in `~/.claude/spares/`, and the
+    /// repository it now works in has to be looked up again.
+    private func enrichIfResumed(_ session: AgentSession) {
+        guard session.isDesktopSession, let pid = session.pid else { return }
+        let claimedSpare = ClaudeDesktop.isSpareDirectory(session.controlTarget.workspacePath)
+            && !session.isDesktopSpare
+        guard session.processStartTime == nil || claimedSpare else { return }
+        enrich(pid: pid, id: session.id)
+    }
+
+    private func enrich(pid: pid_t, id: SessionID? = nil) {
         let inspector = ProcessInspector()
         guard let snapshot = inspector.snapshot(pid: pid) else {
             // Already gone. A hook can reach us after its process has died —
@@ -394,7 +501,11 @@ final class SessionDaemon {
             }
             return
         }
-        guard var session = registry.all.first(where: { $0.pid == pid }) else { return }
+        // By id when the caller knows it: process discovery and the hook can
+        // both hold a row for one pid, and enriching the other one leaves this
+        // one without a start time.
+        let candidate = id.flatMap { registry[$0] } ?? registry.all.first(where: { $0.pid == pid })
+        guard var session = candidate, session.pid == pid else { return }
 
         session.parentPID = snapshot.parentPID
         session.processStartTime = snapshot.startTime
@@ -494,7 +605,7 @@ final class SessionDaemon {
                 isAlive: { inspector.isAlive(pid: $0, startTime: $1) },
                 isStillAnAgent: { agentPIDs.contains($0) }
             )
-            for session in live { registry.update(session) }
+            registry.restore(live)
             let dropped = snapshot.sessions.count - live.count
             logger.info("restored \(live.count) sessions, dropped \(dropped) that no longer exist")
         case .none:
@@ -521,6 +632,8 @@ final class SessionDaemon {
         if ticksSinceReap >= Self.reapInterval {
             ticksSinceReap = 0
             reapDeadSessions()
+            dropReadDesktopSessions()
+            syncCloudSessions()
             drainSpoolIfNotEmpty()
             // Noted rather than published immediately: returning here would
             // skip the prune below, leaving an ended session on screen past

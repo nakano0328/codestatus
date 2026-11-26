@@ -203,7 +203,9 @@ let line = buildEventLine(
         timestampMicroseconds: clock.microseconds,
         parentPID: Int(getppid()),
         termProgram: environmentValue("TERM_PROGRAM"),
-        termSessionID: environmentValue("TERM_SESSION_ID")
+        termSessionID: environmentValue("TERM_SESSION_ID"),
+        entrypoint: environmentValue("CLAUDE_CODE_ENTRYPOINT"),
+        hostSessionID: environmentValue("CLAUDE_CODE_HOST_SESSION_ID")
     ),
     fields: fields
 )
