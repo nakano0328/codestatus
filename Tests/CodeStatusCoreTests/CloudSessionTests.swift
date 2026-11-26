@@ -283,6 +283,65 @@ struct CloudSessionTests {
         #expect(removed == [.sessionRemoved(rowID)])
     }
 
+    private func announcements(_ results: [RegistryEvent]) -> [Transition] {
+        results.compactMap { result -> Transition? in
+            if case .sessionChanged(let t) = result { return t } else { return nil }
+        }
+    }
+
+    @Test("A turn that started and ended between two reads is still announced")
+    func quickTurnBetweenReads() throws {
+        var registry = SessionRegistry()
+        // Read: nothing to list.
+        #expect(registry.syncCloudSessions([cloud(.free, unread: false, updated: 100)], now: Date()).isEmpty)
+
+        // A few seconds later it has run a turn and finished, unseen.
+        let results = registry.syncCloudSessions([cloud(.free, unread: true, updated: 200)], now: Date())
+        #expect(results.contains(.sessionAdded(rowID)))
+        let transition = try #require(announcements(results).first)
+        #expect(transition.from == .busy && transition.to == .free)
+        #expect(transition.eventID.rawValue.hasSuffix("-unseen"))
+
+        // Seen again on the next read: not a second announcement.
+        #expect(announcements(registry.syncCloudSessions([cloud(.free, unread: true, updated: 200)], now: Date())).isEmpty)
+    }
+
+    @Test("A brand-new session that already finished unseen is announced, and one left waiting too")
+    func newSessionAlreadyDone() throws {
+        var registry = SessionRegistry()
+        _ = registry.syncCloudSessions([], now: Date())
+        let other = CloudSessionReader.Session(
+            id: "session_01Other", title: nil, repository: nil, state: .waitingForInput, isUnread: true,
+            updatedAt: Date(timeIntervalSince1970: 300)
+        )
+        let results = registry.syncCloudSessions([cloud(.free, unread: true), other], now: Date())
+        let changes = announcements(results)
+        #expect(changes.count == 2)
+        #expect(changes.allSatisfy { $0.from == .busy })
+        #expect(Set(changes.map(\.to)) == [.free, .waitingForInput])
+    }
+
+    @Test("The first read, and the first after the app was closed, announce nothing")
+    func noBacklogBurst() {
+        var registry = SessionRegistry()
+        #expect(announcements(registry.syncCloudSessions([cloud(.free, unread: true)], now: Date())).isEmpty)
+        #expect(registry.visible.count == 1)
+
+        _ = registry.clearCloudSessions()
+        #expect(registry.visible.isEmpty)
+        #expect(announcements(registry.syncCloudSessions([cloud(.free, unread: true)], now: Date())).isEmpty)
+    }
+
+    @Test("Still unread from before is not news; a dismissed one stays hidden")
+    func notNews() {
+        var registry = SessionRegistry()
+        _ = registry.syncCloudSessions([cloud(.free, unread: true, updated: 100)], now: Date())
+        #expect(announcements(registry.syncCloudSessions([cloud(.free, unread: true, updated: 150)], now: Date())).isEmpty)
+
+        let hidden = registry.syncCloudSessions([cloud(.free, unread: true, updated: 150)], hidden: ["session_01Abc"], now: Date())
+        #expect(hidden == [.sessionRemoved(rowID)])
+    }
+
     @Test("Sync leaves every other row alone")
     func leavesOthers() throws {
         var registry = SessionRegistry()

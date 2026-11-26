@@ -29,6 +29,9 @@ public struct SessionRegistry: Sendable {
     /// Routes events that identify a session only by process, such as exits
     /// reported by the process watcher.
     private var pidIndex: [pid_t: SessionID] = [:]
+    /// Fork addition: whether each cloud session was unread at the last read
+    /// of the desktop app's cache; nil before the first.
+    private var cloudUnread: [String: Bool]?
 
     public init(dedupCapacity: Int = 4096) {
         dedup = EventDeduplicator(capacity: dedupCapacity)
@@ -302,17 +305,29 @@ public struct SessionRegistry: Sendable {
     /// Fork addition: makes the cloud rows match what the desktop app's cache
     /// lists, adding, updating and removing them.
     ///
-    /// Pass only the sessions worth a row (see
-    /// ``CloudSessionReader/Session/isWorthListing``); every cloud row not in
-    /// the list is removed. A state change becomes a ``Transition`` like any
-    /// other, so finishing in the cloud notifies like finishing in a terminal.
-    /// Its id is derived from the session and its update time, so the same
-    /// change seen on two sweeps is announced once.
-    public mutating func syncCloudSessions(_ listed: [CloudSessionReader.Session], now: Date) -> [RegistryEvent] {
+    /// Takes every session in the cache; only those worth a row (see
+    /// ``CloudSessionReader/Session/isWorthListing``) and not in `hidden` get
+    /// one, and every other cloud row is removed. A state change becomes a
+    /// ``Transition`` like any other, so finishing in the cloud notifies like
+    /// finishing in a terminal. Its id is derived from the session and its
+    /// update time, so the same change seen on two sweeps is announced once.
+    ///
+    /// A turn of a few seconds can start and end between two reads of the
+    /// cache, so the busy state is never seen. The cache's `unread` flag
+    /// covers that: a session that was read last time (or did not exist) and
+    /// is now finished and unread has had a turn end unseen, and is announced
+    /// as if it had been seen busy. Not on the first read, which has nothing
+    /// to compare with and would announce every old unread session at once.
+    public mutating func syncCloudSessions(
+        _ all: [CloudSessionReader.Session], hidden: Set<String> = [], now: Date
+    ) -> [RegistryEvent] {
+        let previousUnread = cloudUnread
+        cloudUnread = Dictionary(all.map { ($0.id, $0.isUnread) }, uniquingKeysWith: { first, _ in first })
+
         var results: [RegistryEvent] = []
         var keep: Set<SessionID> = []
 
-        for cloud in listed {
+        for cloud in all where cloud.isWorthListing && !hidden.contains(cloud.id) {
             let id = SessionID.provider(.claudeCode, cloud.id)
             keep.insert(id)
             var session: AgentSession
@@ -338,24 +353,40 @@ public struct SessionRegistry: Sendable {
             session.workspaceName = cloud.repository
             if let updated = cloud.updatedAt { session.lastEventAt = updated }
 
-            if cloud.state != session.state {
+            let endedUnseen = previousUnread != nil
+                && cloud.isUnread && previousUnread?[cloud.id] != true
+                && cloud.state != .busy && before.state != .busy
+            let announcedFrom: AgentState?
+            if endedUnseen {
+                announcedFrom = .busy
+            } else if cloud.state != before.state, before.state != .discovering {
+                announcedFrom = before.state
+            } else {
+                // A row's first state is where it starts, not news.
+                announcedFrom = nil
+            }
+
+            if cloud.state != session.state || announcedFrom != nil {
                 let at = cloud.updatedAt ?? now
-                let transition = Transition(
-                    sessionID: id,
-                    from: session.state,
-                    to: cloud.state,
-                    eventID: EventID("cloud-\(cloud.id)-\(Int(at.timeIntervalSince1970 * 1000))-\(cloud.state.rawValue)"),
-                    source: .reconciliation,
-                    confidence: .medium,
-                    occurredAt: at,
-                    reason: "Claude desktop app's list of cloud sessions"
-                )
                 session.previousState = session.state
                 session.state = cloud.state
                 session.stateChangedAt = at
                 sessions[id] = session
-                // A row's first state is where it starts, not news.
-                if before.state != .discovering { results.append(.sessionChanged(transition)) }
+                if let from = announcedFrom {
+                    let suffix = endedUnseen ? "-unseen" : ""
+                    results.append(.sessionChanged(Transition(
+                        sessionID: id,
+                        from: from,
+                        to: cloud.state,
+                        eventID: EventID("cloud-\(cloud.id)-\(Int(at.timeIntervalSince1970 * 1000))-\(cloud.state.rawValue)\(suffix)"),
+                        source: .reconciliation,
+                        confidence: .medium,
+                        occurredAt: at,
+                        reason: endedUnseen
+                            ? "A turn ran and ended between two reads of the Claude desktop app's list"
+                            : "Claude desktop app's list of cloud sessions"
+                    )))
+                }
             } else if session != before {
                 sessions[id] = session
                 results.append(.sessionRefreshed(id))
@@ -363,6 +394,18 @@ public struct SessionRegistry: Sendable {
         }
 
         for (id, session) in sessions where session.isCloudSession && !keep.contains(id) {
+            results += remove(id)
+        }
+        return results
+    }
+
+    /// Fork addition: drops every cloud row and forgets what was unread, for
+    /// when nothing is keeping the cache fresh. The next read is a first read
+    /// again, so reopening the desktop app does not announce its backlog.
+    public mutating func clearCloudSessions() -> [RegistryEvent] {
+        cloudUnread = nil
+        var results: [RegistryEvent] = []
+        for (id, session) in sessions where session.isCloudSession {
             results += remove(id)
         }
         return results

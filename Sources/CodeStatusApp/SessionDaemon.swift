@@ -389,7 +389,7 @@ final class SessionDaemon {
     /// is the most expensive thing the sweep does.
     private func syncCloudSessions() {
         guard isClaudeDesktopRunning else {
-            handle(registry.syncCloudSessions([], now: Date()))
+            handle(registry.clearCloudSessions())
             return
         }
         guard !isReadingCloudCache else { return }
@@ -404,22 +404,23 @@ final class SessionDaemon {
     private func applyCloudSnapshot(_ snapshot: CloudSessionReader.Snapshot?) {
         isReadingCloudCache = false
         guard let snapshot, isClaudeDesktopRunning else { return }
-        let listed = snapshot.sessions.filter { session in
-            guard session.isWorthListing else { return false }
+        var hidden: Set<String> = []
+        for session in snapshot.sessions {
             let id = SessionID.provider(.claudeCode, session.id)
-            guard let dismissedAt = dismissedCloud[id] else { return true }
+            guard let dismissedAt = dismissedCloud[id] else { continue }
             if let updated = session.updatedAt, updated > dismissedAt {
                 dismissedCloud.removeValue(forKey: id)
-                return true
+            } else {
+                hidden.insert(session.id)
             }
-            return false
         }
-        if listed.count != lastCloudCount {
+        let listed = snapshot.sessions.filter { $0.isWorthListing && !hidden.contains($0.id) }.count
+        if listed != lastCloudCount {
             // Counts only: the titles are the user's.
-            logger.info("cloud sessions: \(listed.count, privacy: .public) listed of \(snapshot.sessions.count, privacy: .public) in the desktop app's cache")
-            lastCloudCount = listed.count
+            logger.info("cloud sessions: \(listed, privacy: .public) listed of \(snapshot.sessions.count, privacy: .public) in the desktop app's cache")
+            lastCloudCount = listed
         }
-        handle(registry.syncCloudSessions(listed, now: Date()))
+        handle(registry.syncCloudSessions(snapshot.sessions, hidden: hidden, now: Date()))
     }
 
     /// The same question the notification filter asks, for a desktop session.
