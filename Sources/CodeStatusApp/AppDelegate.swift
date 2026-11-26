@@ -46,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 selectedTTYProvider: { [opener] in opener?.frontmostTerminalTTY() },
                 desktopFocusProvider: {
                     ClaudeDesktop.readFocus(home: FileManager.default.homeDirectoryForCurrentUser)
+                },
+                desktopPopoutsProvider: {
+                    ClaudeDesktop.readPopoutSessions(home: FileManager.default.homeDirectoryForCurrentUser)
                 }
             )
         )

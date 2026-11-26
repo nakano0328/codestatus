@@ -175,6 +175,7 @@ struct CloudSessionTests {
         let snapshot = try #require(CloudSessionReader.snapshot(from: try ChromiumValueDecoding.decodeIndexedDBBlob(blob(cache([
             record("session_01Run", bucket: "working", worker: "running", session: "running"),
             record("session_01Start", bucket: "working", connection: "connected"),
+            record("session_01Pending", bucket: "working", session: "pending"),
             record("session_01Wait", bucket: "blocked", unread: true, category: "need_input"),
             record("session_01Done", bucket: "completed", unread: true),
             record("session_01Seen", bucket: "review_ready"),
@@ -182,13 +183,14 @@ struct CloudSessionTests {
         let states = Dictionary(uniqueKeysWithValues: snapshot.sessions.map { ($0.id, $0.state) })
         #expect(states["session_01Run"] == .busy)
         #expect(states["session_01Start"] == .busy)
+        #expect(states["session_01Pending"] == .busy)
         #expect(states["session_01Wait"] == .waitingForInput)
         #expect(states["session_01Done"] == .free)
         #expect(states["session_01Seen"] == .free)
         #expect(snapshot.fetchedAt == Date(timeIntervalSince1970: 1_795_595_709.196))
 
         let listed = Set(snapshot.sessions.filter(\.isWorthListing).map(\.id))
-        #expect(listed == ["session_01Run", "session_01Start", "session_01Wait", "session_01Done"])
+        #expect(listed == ["session_01Run", "session_01Start", "session_01Pending", "session_01Wait", "session_01Done"])
     }
 
     @Test("Archived sessions and ids in any other shape are left out", arguments: [

@@ -59,6 +59,46 @@ struct ClaudeSessionFileTests {
         #expect(!other.describes(session))
     }
 
+    private let desktopFile = #"{"pid":16344,"sessionId":"fabbed23","hostSessionId":"local_7c552b77-49be-430c-9509-6ec3285e9ffb","entrypoint":"claude-desktop","cwd":"/Users/x/proj","status":"idle","statusUpdatedAt":1795582293685}"#
+
+    @Test("A desktop session found only as a process becomes its own row, named by its record")
+    func promotesDesktopProcess() throws {
+        var registry = SessionRegistry()
+        _ = registry.adopt(provider: .claudeCode, pid: 16344, startTime: 9, now: Date())
+        let processRow = SessionID.process(.claudeCode, pid: 16344, startTime: 9)
+        #expect(registry.unreported.count == 1)
+
+        let parsed = try #require(ClaudeSessionFile.parse(Data(desktopFile.utf8), expectedPID: 16344))
+        let results = registry.promoteDesktopProcess(processRow, using: parsed, now: Date())
+
+        let id = SessionID.provider(.claudeCode, "local_7c552b77-49be-430c-9509-6ec3285e9ffb")
+        #expect(results == [.sessionRemoved(processRow), .sessionAdded(id)])
+        let row = try #require(registry[id])
+        #expect(row.state == .free)
+        #expect(row.isDesktopSession)
+        #expect(row.pid == 16344)
+        #expect(row.processStartTime == 9)
+        #expect(row.providerSessionID == "fabbed23")
+        #expect(registry.unreported.isEmpty)
+        #expect(registry.visible.map(\.id) == [id])
+    }
+
+    @Test("A terminal session's record is not enough for a row, and a hook row wins over the process copy")
+    func promotionLimits() throws {
+        var registry = SessionRegistry()
+        _ = registry.adopt(provider: .claudeCode, pid: 16344, startTime: 9, now: Date())
+        let processRow = SessionID.process(.claudeCode, pid: 16344, startTime: 9)
+        let terminal = try #require(ClaudeSessionFile.parse(Data(
+            #"{"pid":16344,"sessionId":"t","entrypoint":"cli","status":"idle"}"#.utf8), expectedPID: 16344))
+        #expect(registry.promoteDesktopProcess(processRow, using: terminal, now: Date()).isEmpty)
+
+        let hook = #"{"v":1,"id":"h","provider":"claudeCode","hook_event_name":"Stop","ppid":16344,"entrypoint":"claude-desktop","host_session_id":"local_7c552b77-49be-430c-9509-6ec3285e9ffb","session_id":"fabbed23"}"#
+        _ = registry.ingest(try EventWireDecoder.decode(line: Data(hook.utf8)))
+        let parsed = try #require(ClaudeSessionFile.parse(Data(desktopFile.utf8), expectedPID: 16344))
+        #expect(registry.promoteDesktopProcess(processRow, using: parsed, now: Date()) == [.sessionRemoved(processRow)])
+        #expect(registry.all.count == 1)
+    }
+
     @Test("A reconnecting row settles quietly; anything else is left as it is")
     func reverify() throws {
         var registry = SessionRegistry()

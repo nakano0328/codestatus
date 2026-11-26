@@ -13,6 +13,9 @@ public struct ClaudeSessionFile: Sendable, Equatable {
     public var pid: pid_t
     public var sessionID: String?
     public var hostSessionID: String?
+    /// `CLAUDE_CODE_ENTRYPOINT` of the process, e.g. `claude-desktop`.
+    public var entrypoint: String?
+    public var cwd: String?
     /// nil for a status this build does not know; the caller then leaves the
     /// row as it is.
     public var state: AgentState?
@@ -34,6 +37,8 @@ public struct ClaudeSessionFile: Sendable, Equatable {
             pid: pid,
             sessionID: object["sessionId"] as? String,
             hostSessionID: object["hostSessionId"] as? String,
+            entrypoint: object["entrypoint"] as? String,
+            cwd: object["cwd"] as? String,
             state: state(status: object["status"] as? String, waitingFor: object["waitingFor"] as? String),
             statusUpdatedAt: updated
         )
@@ -49,6 +54,14 @@ public struct ClaudeSessionFile: Sendable, Equatable {
         case "waiting": return waitingFor == "permission prompt" ? .waitingForApproval : .waitingForInput
         default: return nil
         }
+    }
+
+    /// The desktop app's id for the session, when the desktop app runs it.
+    public var desktopHostSessionID: String? {
+        guard entrypoint == ClaudeDesktop.entrypoint, let hostSessionID,
+              ClaudeDesktop.isValidHostSessionID(hostSessionID)
+        else { return nil }
+        return hostSessionID
     }
 
     /// Whether this file describes the agent behind `session`.

@@ -243,6 +243,8 @@ struct StatePersistenceTests {
         // Reviewed (fork addition): the Claude desktop app's id for a session,
         // `local_` plus a uuid, checked on decode. Metadata like a session id.
         "hostSessionID",
+        // Reviewed (fork addition): a date, when a desktop turn ended unseen.
+        "unseenSince",
         // Reviewed and *excluded from the snapshot*: the name the agent gave
         // the session, which the model writes out of the conversation. It is
         // held in memory to label a row and is left out of `CodingKeys`, so it

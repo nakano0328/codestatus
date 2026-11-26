@@ -181,6 +181,9 @@ public final class CloudSessionReader: @unchecked Sendable {
         let worker = record["worker_status"]?.string
         let session = record["session_status"]?.string
         if worker == "running" || session == "running" { return .busy }
+        // Just created: the machine is still starting, and the first turn
+        // follows. Seen as `pending` with no worker yet.
+        if session == "pending" { return .busy }
         if bucket == "working" {
             // The app treats `working` with an idle worker and a live
             // connection as still working; with no connection the turn is over.

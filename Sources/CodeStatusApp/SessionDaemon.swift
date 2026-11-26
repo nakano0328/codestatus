@@ -332,6 +332,15 @@ final class SessionDaemon {
     /// hook as before.
     private func reverifyReconnecting() {
         var results: [RegistryEvent] = []
+        // Desktop sessions we only found as processes, named from the same
+        // record (fork addition).
+        for session in registry.all where !session.hasHookEvidence && session.provider == .claudeCode && session.state.isActive {
+            guard let pid = session.pid,
+                  let file = ClaudeSessionFile.read(pid: pid, home: paths.home),
+                  file.desktopHostSessionID != nil
+            else { continue }
+            results += registry.promoteDesktopProcess(session.id, using: file, now: Date())
+        }
         for session in registry.all where session.state == .reconnecting && session.provider == .claudeCode {
             guard let pid = session.pid,
                   let file = ClaudeSessionFile.read(pid: pid, home: paths.home),
@@ -355,12 +364,15 @@ final class SessionDaemon {
         var results: [RegistryEvent] = []
         for session in registry.all where session.isPausedDesktopSession && session.state.isActive {
             guard let hostSessionID = session.hostSessionID else { continue }
-            switch desktopReader.lookup(hostSessionID: hostSessionID) {
-            case .found(let record) where record.isUnread:
+            let lookup = desktopReader.lookup(hostSessionID: hostSessionID)
+            switch lookup {
+            case .found(let record) where record.isStillUnseen(since: session.unseenSince):
                 continue
             case .unreadable:
                 continue
             case .found, .missing:
+                let why = lookup == .missing ? "no record in the app" : "seen or archived"
+                logger.info("dropping paused desktop session \(session.id.rawValue, privacy: .public): \(why, privacy: .public)")
                 results += registry.remove(session.id)
             }
         }
@@ -408,6 +420,17 @@ final class SessionDaemon {
             lastCloudCount = listed.count
         }
         handle(registry.syncCloudSessions(listed, now: Date()))
+    }
+
+    /// The same question the notification filter asks, for a desktop session.
+    private func isUserLookingAtDesktop(_ session: AgentSession) -> Bool {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let inFront = frontmost == HostApplication.claudeDesktop.bundleIdentifier
+        return ClaudeDesktop.isUserLooking(
+            at: session, frontmostBundleIdentifier: frontmost,
+            focus: inFront ? ClaudeDesktop.readFocus(home: paths.home) : nil,
+            popouts: inFront ? ClaudeDesktop.readPopoutSessions(home: paths.home) : []
+        ) ?? false
     }
 
     private var isClaudeDesktopRunning: Bool {
@@ -458,6 +481,15 @@ final class SessionDaemon {
             case .sessionChanged(let transition):
                 changed = true
                 guard let session = registry[transition.sessionID] else { continue }
+                if session.isPausedDesktopSession, transition.source == .process {
+                    logger.info("paused desktop session \(session.id.rawValue, privacy: .public): the app stopped its process")
+                }
+                if session.isDesktopSession,
+                   let noted = ClaudeDesktop.noteTurnChange(
+                       session, transition: transition, userWasLooking: isUserLookingAtDesktop(session)
+                   ) {
+                    registry.update(noted)
+                }
                 enrichIfResumed(session)
                 // The stale filter is what prevents a wake from firing a burst
                 // of notifications for turns that finished hours ago.

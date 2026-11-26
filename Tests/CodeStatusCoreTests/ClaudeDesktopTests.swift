@@ -279,6 +279,24 @@ struct ClaudeDesktopTests {
         #expect(ClaudeDesktop.isUserLooking(at: session, frontmostBundleIdentifier: claudeApp, focus: nil) == true)
     }
 
+    @Test("A session in its own window is on screen whatever the main window shows")
+    func popouts() throws {
+        var registry = SessionRegistry()
+        _ = registry.ingest(try desktop("1", "Stop"))
+        let session = try #require(registry[rowID])
+        let file = Data(#"{"version":2,"windows":[{"kind":"session","key":"\#(host)","view":"{}"},{"kind":"session","key":"../x"},{"kind":"other","key":"session_01Abc"}]}"#.utf8)
+        let popouts = ClaudeDesktop.popoutSessions(in: file)
+        #expect(popouts == [host])
+        #expect(ClaudeDesktop.isUserLooking(
+            at: session, frontmostBundleIdentifier: claudeApp,
+            focus: .session("session_01JRWGj6bZCxie3VMxVXXBin"), popouts: popouts
+        ) == true)
+        #expect(ClaudeDesktop.isUserLooking(
+            at: session, frontmostBundleIdentifier: "com.google.Chrome", focus: .nothing, popouts: popouts
+        ) == false)
+        #expect(ClaudeDesktop.popoutSessions(in: Data("nope".utf8)).isEmpty)
+    }
+
     @Test("A cloud session on screen in the app is held back too; a terminal session is not judged here")
     func cloudAndOthers() throws {
         var registry = SessionRegistry()
@@ -305,26 +323,74 @@ struct ClaudeDesktopTests {
         return root
     }
 
-    @Test("A turn that ended after the user last looked is unread")
-    func unread() throws {
+    @Test("Still unseen while not switched to since the turn ended unseen")
+    func stillUnseen() throws {
         let root = try writeRecord(#"{"isArchived":false,"lastFocusedAt":1000,"lastTurnEdgeAt":2000,"title":"x"}"#)
         let lookup = DesktopSessionReader(root: root).lookup(hostSessionID: host)
         guard case .found(let record) = lookup else { Issue.record("not found: \(lookup)"); return }
-        #expect(record.isUnread)
+        #expect(record.isStillUnseen(since: Date(timeIntervalSince1970: 2)))
         #expect(record.lastTurnEndedAt == Date(timeIntervalSince1970: 2))
     }
 
-    @Test("Looked at since, or archived, it is read", arguments: [
-        #"{"isArchived":false,"lastFocusedAt":3000,"lastTurnEdgeAt":2000}"#,
-        #"{"isArchived":true,"lastFocusedAt":1000,"lastTurnEdgeAt":2000}"#,
-        #"{"isArchived":false,"lastFocusedAt":1000}"#,
+    @Test("Switched to since, archived, or never marked: seen", arguments: [
+        (#"{"isArchived":false,"lastFocusedAt":3000,"lastTurnEdgeAt":2000}"#, 2.0 as Double?),
+        (#"{"isArchived":true,"lastFocusedAt":1000,"lastTurnEdgeAt":2000}"#, 2.0),
+        // The app's own record says unread, but CodeStatus saw the user
+        // watching when it ended, so nothing was marked.
+        (#"{"isArchived":false,"lastFocusedAt":1000,"lastTurnEdgeAt":2000}"#, nil),
     ])
-    func read(_ json: String) throws {
+    func seen(_ json: String, _ since: Double?) throws {
         let root = try writeRecord(json)
         guard case .found(let record) = DesktopSessionReader(root: root).lookup(hostSessionID: host) else {
             Issue.record("not found"); return
         }
-        #expect(!record.isUnread)
+        #expect(!record.isStillUnseen(since: since.map { Date(timeIntervalSince1970: $0) }))
+    }
+
+    // MARK: - Remembering whether a turn ended unseen
+
+    private func transition(_ from: AgentState, _ to: AgentState, source: EventSource = .hook, at: TimeInterval = 50) -> Transition {
+        Transition(
+            sessionID: rowID, from: from, to: to, eventID: EventID("t"), source: source,
+            confidence: .high, occurredAt: Date(timeIntervalSince1970: at), reason: "test"
+        )
+    }
+
+    @Test("A turn that ends while the user looks elsewhere is marked; one they watch is not")
+    func marksUnseenEnds() throws {
+        var registry = SessionRegistry()
+        _ = registry.ingest(try desktop("1", "Stop"))
+        let session = try #require(registry[rowID])
+
+        let unseen = try #require(ClaudeDesktop.noteTurnChange(session, transition: transition(.busy, .free), userWasLooking: false))
+        #expect(unseen.unseenSince == Date(timeIntervalSince1970: 50))
+        #expect(ClaudeDesktop.noteTurnChange(session, transition: transition(.busy, .free), userWasLooking: true) == nil)
+
+        let waiting = try #require(ClaudeDesktop.noteTurnChange(session, transition: transition(.busy, .waitingForApproval), userWasLooking: false))
+        #expect(waiting.unseenSince != nil)
+
+        // The next prompt is the user back at it.
+        let cleared = try #require(ClaudeDesktop.noteTurnChange(unseen, transition: transition(.free, .busy), userWasLooking: false))
+        #expect(cleared.unseenSince == nil)
+
+        // The app pausing it is not a turn ending.
+        #expect(ClaudeDesktop.noteTurnChange(session, transition: transition(.busy, .free, source: .process), userWasLooking: false) == nil)
+    }
+
+    @Test("The mark survives the pause and a restart")
+    func markSurvives() throws {
+        var registry = SessionRegistry()
+        _ = registry.ingest(try desktop("1", "UserPromptSubmit"))
+        var session = try #require(registry[rowID])
+        session.unseenSince = Date(timeIntervalSince1970: 50)
+        registry.update(session)
+        _ = registry.ingest(ProcessWatcher.exitEvent(pid: 16403, startTime: 7, provider: .claudeCode))
+        let paused = try #require(registry[rowID])
+        #expect(paused.isPausedDesktopSession)
+        #expect(paused.unseenSince == Date(timeIntervalSince1970: 50))
+
+        let restored = try JSONDecoder().decode(AgentSession.self, from: JSONEncoder().encode(paused))
+        #expect(restored.unseenSince == Date(timeIntervalSince1970: 50))
     }
 
     @Test("No file is missing; a broken one is unreadable, never read")

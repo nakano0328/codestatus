@@ -217,6 +217,13 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
     /// needs it to be opened, and to check whether it was read.
     public var hostSessionID: String?
 
+    /// Fork addition: when a desktop session last finished a turn, or stopped
+    /// to wait, while the user was not looking at it. nil once they have, or
+    /// while a turn runs. What a paused desktop row stays for; see
+    /// ``ClaudeDesktop/noteTurnChange(_:transition:userWasLooking:)``.
+    /// Persisted, since a restart does not mean it was seen.
+    public var unseenSince: Date?
+
     // Host
     public var hostApplication: HostApplication
     public var hostBundleIdentifier: String?
@@ -256,7 +263,7 @@ public struct AgentSession: Identifiable, Sendable, Codable, Equatable {
         case startedAt, lastEventAt
         case pid, parentPID, processStartTime, tty
         case cwd, gitRoot, repositoryName, workspaceName
-        case conversationURL, hostSessionID
+        case conversationURL, hostSessionID, unseenSince
         case hostApplication, hostBundleIdentifier
         case sourceAdapter, capabilities, controlTarget, lastError
         case hasHookEvidence

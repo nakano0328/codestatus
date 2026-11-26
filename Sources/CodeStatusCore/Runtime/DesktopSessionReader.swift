@@ -29,12 +29,16 @@ public struct DesktopSessionReader: Sendable {
             self.lastFocusedAt = lastFocusedAt
         }
 
-        /// A turn finished after the user last looked: the "unread" the app's
-        /// own sidebar shows.
-        public var isUnread: Bool {
-            guard !isArchived, let ended = lastTurnEndedAt else { return false }
+        /// Whether something CodeStatus saw end unseen at `since` is still
+        /// unseen: not archived, and not switched to since.
+        ///
+        /// `lastTurnEdgeAt` against `lastFocusedAt` alone is not enough: the
+        /// app moves `lastFocusedAt` only when the user switches to a session,
+        /// so a turn they watched end in front of them reads as unread.
+        public func isStillUnseen(since: Date?) -> Bool {
+            guard !isArchived, let since else { return false }
             guard let focused = lastFocusedAt else { return true }
-            return ended > focused
+            return focused < since
         }
     }
 

@@ -19,7 +19,8 @@ ChatGPT の状態は Chrome 拡張 [chatgpt-unread](https://github.com/nakano032
 
 - アプリは、開いたセッションのプロセスを自分の判断で止める（メモリ不足、終了、再起動）。止まってもセッションは続いていて、次に開くと `--resume` で別プロセスとして再開する。本家はプロセス終了をセッション終了として扱うので、見ていないうちに終わった行が消えていた
   - プロセス終了と `SessionEnd` は「一時停止」として扱い、行は free のまま残す。実行中に止まった場合も free にするが、「finished」の通知は出さない
-  - 一時停止中の行は、アプリ自身の記録（`~/Library/Application Support/Claude/claude-code-sessions/…/local_*.json` の `lastTurnEdgeAt` と `lastFocusedAt`）で未確認のあいだだけ残し、見た・アーカイブした・消したら外す。読めないときは残す
+  - 一時停止中の行は、ターンが「見ていないあいだに」終わったものだけ残す。終わった瞬間にあなたがそのセッションを見ていたか（下の「見ているセッションの通知だけ止める」と同じ判定）を CodeStatus が覚えておき（`unseenSince`）、そのあとアプリでそのセッションに切り替えたら（`claude-code-sessions/…/local_*.json` の `lastFocusedAt`）、アーカイブしたら、消したら外す。読めないときは残す
+  - アプリの `lastTurnEdgeAt > lastFocusedAt` だけで判断しないのは、`lastFocusedAt` が「切り替えた時刻」でしかないため。開いたまま終わるのを見ていたセッションまで未読になり、実機では 10 月のものを含む 10 件がそう見えていた
 - 新しいセッション用に `~/.claude/spares/` で予備のプロセスを先に起動している。その時点で `SessionStart` が届くので、予備のあいだは一覧に出さない
 - 行の鍵は、hook が送る `CLAUDE_CODE_HOST_SESSION_ID`（`local_…`）。予備から本番、再開、`/clear` でエージェント側のセッション ID が変わっても 1 行のまま
 - `TERM_PROGRAM` がないので、`CLAUDE_CODE_ENTRYPOINT=claude-desktop` で見分ける。右端は「Claude」、クリックで `claude://code/continue?session=local_…` を開く（アプリの Dock メニューと同じリンク）
@@ -30,7 +31,8 @@ ChatGPT の状態は Chrome 拡張 [chatgpt-unread](https://github.com/nakano032
 
 - 場所は `~/Library/Application Support/Claude/IndexedDB/https_claude.ai_0.indexeddb.blob/1/*/*`。保存のたびに新しいファイルになるので、一番新しいものを読む
 - 形式は Blink の値ラッパー → Snappy 圧縮 → V8 のシリアライズ形式。`ChromiumValueDecoding` に必要な分だけ実装した。範囲外読み・深すぎる入れ子・巨大な長さはすべてエラーにして、クラッシュしない
-- 状態は、アプリのサイドバーと同じ項目から決める: `worker_status` / `session_status` が `running`、または `status_bucket` が `working` なら busy、`blocked` か `need_input` なら入力待ち、それ以外は free
+- 状態は、アプリのサイドバーと同じ項目から決める: `worker_status` / `session_status` が `running`、`session_status` が `pending`（作った直後）、または `status_bucket` が `working` なら busy、`blocked` か `need_input` なら入力待ち、それ以外は free
+- 実機で確かめたこと: デスクトップアプリを裏に回したまま（前面は Chrome）クラウドのセッションを動かすと、実行中のあいだアプリは数秒おきに一覧を取り直し、完了から約 9 秒で CodeStatus が通知した
 - 一覧に出すのは、作業中か未読（`unread`）のものだけ。読み終わったものや、アーカイブしたものは出さない
 - 右端は「Cloud」、クリックで `claude://code/session_…` をデスクトップアプリで開く（アプリがなければ claude.ai）
 - デスクトップアプリが起動していないときは、キャッシュが更新されないので、クラウドの行はすべて外す。読めないときは前の状態のまま
@@ -43,12 +45,14 @@ ChatGPT の状態は Chrome 拡張 [chatgpt-unread](https://github.com/nakano032
 
 Claude Code は、動いているプロセスごとに `~/.claude/sessions/<pid>.json` を書いていて（`claude agents --json` が読むもの）、そこに今の状態（`busy` / `waiting` / `idle` / `shell`）がある。reconnecting の Claude Code の行は、10 秒ごとの巡回でこれを読んで状態を戻す（`ClaudeSessionFile`）。通知は出さない。ファイルが読めないとき（Codex を含む）は、これまでどおり次の hook を待つ。
 
+同じファイルで、プロセスの検出でしか見つかっていないデスクトップのセッション（CodeStatus が止まっているあいだに始まり、そのあと何も起きていないもの）も、ちゃんとした行にする。そうしないと「報告していないエージェント」に数えられて、設定が壊れているように見えていた。ターミナルのセッションは、どのターミナルかがファイルからわからないので、これまでどおり次の hook を待つ。
+
 ## 見ているセッションの通知だけ止める
 
 本家は「セッションのアプリが前面にあれば、そのセッションの通知は出さない」。デスクトップアプリは 1 つのウィンドウで全セッションを扱うので、そのままだと 1 つを読んでいるあいだ、ほかのセッションの通知まで止まっていた。
 
 - デスクトップアプリのログ（`~/Library/Logs/Claude/main.log`）の末尾から、最後の `LocalSessions.setFocusedSession: sessionId=…` を読み、今開いているセッションを知る（`local_…` / `session_…` / `null`）
-- アプリが前面にあり、そのセッションを開いているときだけ通知を止める。クラウドのセッションも同じ
+- アプリが前面にあり、そのセッションをメインウィンドウで開いているか、別ウィンドウで開いている（`~/Library/Application Support/Claude/session-popouts.json`）ときだけ通知を止める。クラウドのセッションも同じ
 - ログで判断できないときは、デスクトップのセッションは本家どおり「アプリが前面なら止める」、クラウドのセッションは止めない
 - ログを読むのは、通知を出すかどうか決めるとき、しかもアプリが前面のときだけ
 

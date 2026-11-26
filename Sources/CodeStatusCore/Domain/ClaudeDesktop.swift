@@ -45,6 +45,35 @@ public enum ClaudeDesktop {
     }
 }
 
+// MARK: - Whether the user has seen a turn end
+
+public extension ClaudeDesktop {
+    /// Records, on a desktop session, whether the user saw its turn end.
+    ///
+    /// The app's own record cannot answer that: `lastFocusedAt` moves only
+    /// when the user switches *to* a session, so one they watched finish reads
+    /// as finished after they last looked. So CodeStatus remembers what it saw
+    /// at the moment the turn ended. Returns nil when nothing changes.
+    static func noteTurnChange(
+        _ session: AgentSession,
+        transition: Transition,
+        userWasLooking: Bool
+    ) -> AgentSession? {
+        guard session.isDesktopSession, transition.source == .hook else { return nil }
+        var updated = session
+        switch transition.to {
+        case .busy:
+            updated.unseenSince = nil
+        case .free, .waitingForInput, .waitingForApproval, .failed:
+            guard transition.from == .busy else { return nil }
+            updated.unseenSince = userWasLooking ? nil : transition.occurredAt
+        default:
+            return nil
+        }
+        return updated.unseenSince == session.unseenSince ? nil : updated
+    }
+}
+
 // MARK: - Which session the app is showing
 
 /// What the desktop app has in front of the user, as its own log last said.
@@ -83,9 +112,31 @@ public extension ClaudeDesktop {
         return focus(inLog: String(decoding: data, as: UTF8.self))
     }
 
+    /// Sessions open in their own window. The app rewrites this file as those
+    /// windows open and close. They sit on screen beside the main window, and
+    /// the main window's focus line says nothing about them.
+    static func readPopoutSessions(home: URL) -> Set<String> {
+        let url = home.appendingPathComponent("Library/Application Support/Claude/session-popouts.json")
+        guard let data = try? Data(contentsOf: url), data.count <= 1_048_576 else { return [] }
+        return popoutSessions(in: data)
+    }
+
+    static func popoutSessions(in data: Data) -> Set<String> {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let windows = object["windows"] as? [[String: Any]]
+        else { return [] }
+        return Set(windows.compactMap { window in
+            guard window["kind"] as? String == "session", let key = window["key"] as? String,
+                  isValidHostSessionID(key) || CloudSessionReader.isValidCloudSessionID(key)
+            else { return nil }
+            return key
+        })
+    }
+
     /// Whether the user is looking at a desktop or cloud session, for holding
     /// back its notification. nil for any other session, which the caller
-    /// judges as before.
+    /// judges as before. A session in its own window counts as looked at
+    /// while the app is in front: that window is on screen.
     ///
     /// The app being in front is not enough: one window holds every session,
     /// so that would silence all of them while the user reads one. Only the
@@ -95,10 +146,12 @@ public extension ClaudeDesktop {
     static func isUserLooking(
         at session: AgentSession,
         frontmostBundleIdentifier: String?,
-        focus: ClaudeDesktopFocus?
+        focus: ClaudeDesktopFocus?,
+        popouts: Set<String> = []
     ) -> Bool? {
         guard session.isDesktopSession || session.isCloudSession else { return nil }
         guard frontmostBundleIdentifier == HostApplication.claudeDesktop.bundleIdentifier else { return false }
+        if let id = session.hostSessionID, popouts.contains(id) { return true }
         switch focus {
         case .session(let id): return id == session.hostSessionID
         case .nothing: return false

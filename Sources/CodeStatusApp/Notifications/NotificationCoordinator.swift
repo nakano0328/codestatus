@@ -121,7 +121,11 @@ public final class NotificationCoordinator {
     /// Handles one transition, posting at most one notification.
     public func handle(_ transition: Transition, session: AgentSession, now: Date = Date()) {
         guard let content = Self.content(for: transition, session: session) else { return }
-        guard shouldDeliver(transition, session: session, now: now) else { return }
+        let decision = deliveryDecision(transition, session: session, now: now)
+        // Ids and states only, never the title or the body.
+        let change = "\(transition.from.rawValue) -> \(transition.to.rawValue)"
+        logger.info("notification for \(session.id.rawValue, privacy: .public) (\(change, privacy: .public)): \(decision.rawValue, privacy: .public)")
+        guard decision == .posted else { return }
         guard posted.admit(transition.eventID) else { return }
 
         let notification = UNMutableNotificationContent()
@@ -172,18 +176,25 @@ public final class NotificationCoordinator {
         }
     }
 
-    private func shouldDeliver(_ transition: Transition, session: AgentSession, now: Date) -> Bool {
-        guard preferences.notificationsEnabled else { return false }
-        guard !preferences.isMuted(at: now) else { return false }
+    enum DeliveryDecision: String {
+        case posted
+        case disabled = "held back: notifications are off"
+        case muted = "held back: muted"
+        case looking = "held back: the user is looking at it"
+    }
+
+    private func deliveryDecision(_ transition: Transition, session: AgentSession, now: Date) -> DeliveryDecision {
+        guard preferences.notificationsEnabled else { return .disabled }
+        guard !preferences.isMuted(at: now) else { return .muted }
 
         // Never interrupt someone who is already watching the session that
         // changed. Checked per tab rather than per app: being in a *different*
         // Terminal tab should still notify.
         if preferences.onlyWhenHostUnfocused, let suppression,
            suppression.isUserLookingAt(session) {
-            return false
+            return .looking
         }
-        return true
+        return .posted
     }
 
     // MARK: - Content
@@ -284,13 +295,17 @@ public struct FrontmostSessionSuppressor: NotificationSuppressing {
     private let selectedTTYProvider: () -> String?
     /// Fork addition: which session the Claude desktop app is showing.
     private let desktopFocusProvider: () -> ClaudeDesktopFocus?
+    /// Fork addition: sessions the desktop app has open in their own window.
+    private let desktopPopoutsProvider: () -> Set<String>
 
     public init(
         selectedTTYProvider: @escaping () -> String?,
-        desktopFocusProvider: @escaping () -> ClaudeDesktopFocus? = { nil }
+        desktopFocusProvider: @escaping () -> ClaudeDesktopFocus? = { nil },
+        desktopPopoutsProvider: @escaping () -> Set<String> = { [] }
     ) {
         self.selectedTTYProvider = selectedTTYProvider
         self.desktopFocusProvider = desktopFocusProvider
+        self.desktopPopoutsProvider = desktopPopoutsProvider
     }
 
     public func isUserLookingAt(_ session: AgentSession) -> Bool {
@@ -298,9 +313,11 @@ public struct FrontmostSessionSuppressor: NotificationSuppressing {
         // Asked only for a desktop or cloud session with the app in front,
         // since it reads the app's log.
         if session.isDesktopSession || session.isCloudSession {
-            let focus = frontmost == HostApplication.claudeDesktop.bundleIdentifier ? desktopFocusProvider() : nil
+            let inFront = frontmost == HostApplication.claudeDesktop.bundleIdentifier
             if let looking = ClaudeDesktop.isUserLooking(
-                at: session, frontmostBundleIdentifier: frontmost, focus: focus
+                at: session, frontmostBundleIdentifier: frontmost,
+                focus: inFront ? desktopFocusProvider() : nil,
+                popouts: inFront ? desktopPopoutsProvider() : []
             ) {
                 return looking
             }

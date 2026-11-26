@@ -383,6 +383,54 @@ public struct SessionRegistry: Sendable {
         return [.sessionRefreshed(id)]
     }
 
+    /// Fork addition: turns a desktop session found only by process discovery
+    /// into a proper row, from Claude Code's own record of it.
+    ///
+    /// An idle desktop session sends no hook until someone types into it, so
+    /// one CodeStatus never heard from (started while it was not running, or
+    /// lost from a snapshot) sat in the "not reporting" count, reading as a
+    /// broken install. Its record names the session and says what it is
+    /// doing, which is the agent reporting on itself just as a hook would.
+    /// Only desktop sessions: a terminal session's record cannot say which
+    /// terminal it is in, which its row needs and its next hook will bring.
+    public mutating func promoteDesktopProcess(
+        _ processRowID: SessionID, using file: ClaudeSessionFile, now: Date
+    ) -> [RegistryEvent] {
+        guard let process = sessions[processRowID], !process.hasHookEvidence,
+              process.pid == file.pid,
+              let hostSessionID = file.desktopHostSessionID,
+              let state = file.state
+        else { return [] }
+        let id = SessionID.provider(.claudeCode, hostSessionID)
+        // A row the hook made already speaks for this session; the process
+        // row is a second copy of it.
+        guard sessions[id] == nil else { return remove(processRowID) }
+
+        var results = remove(processRowID)
+        var session = AgentSession(
+            id: id, provider: .claudeCode, state: state, stateConfidence: .medium,
+            now: file.statusUpdatedAt ?? now, sourceAdapter: "claudeSessionFile"
+        )
+        session.providerSessionID = file.sessionID
+        session.hostSessionID = hostSessionID
+        session.hostApplication = .claudeDesktop
+        session.hostBundleIdentifier = HostApplication.claudeDesktop.bundleIdentifier
+        session.controlTarget = process.controlTarget
+        session.controlTarget.hostApplication = .claudeDesktop
+        session.pid = process.pid
+        session.parentPID = process.parentPID
+        session.processStartTime = process.processStartTime
+        session.cwd = file.cwd ?? process.cwd
+        session.gitRoot = process.gitRoot
+        session.repositoryName = process.repositoryName
+        session.capabilities = [.canOpen, .canIdentifyExactConversation]
+        session.hasHookEvidence = true
+        sessions[id] = session
+        indexPID(for: session)
+        results.append(.sessionAdded(id))
+        return results
+    }
+
     /// Puts back sessions saved before a restart.
     ///
     /// ``update(_:)`` only replaces sessions that already exist, so restoring
