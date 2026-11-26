@@ -43,7 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         opener = SessionOpener()
         notifications = NotificationCoordinator(
             suppression: FrontmostSessionSuppressor(
-                selectedTTYProvider: { [opener] in opener?.frontmostTerminalTTY() }
+                selectedTTYProvider: { [opener] in opener?.frontmostTerminalTTY() },
+                desktopFocusProvider: {
+                    ClaudeDesktop.readFocus(home: FileManager.default.homeDirectoryForCurrentUser)
+                }
             )
         )
         daemon = SessionDaemon(model: model, notifications: notifications)

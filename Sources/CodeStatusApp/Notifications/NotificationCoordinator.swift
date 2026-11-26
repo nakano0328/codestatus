@@ -282,12 +282,29 @@ public final class NotificationCoordinator {
 @MainActor
 public struct FrontmostSessionSuppressor: NotificationSuppressing {
     private let selectedTTYProvider: () -> String?
+    /// Fork addition: which session the Claude desktop app is showing.
+    private let desktopFocusProvider: () -> ClaudeDesktopFocus?
 
-    public init(selectedTTYProvider: @escaping () -> String?) {
+    public init(
+        selectedTTYProvider: @escaping () -> String?,
+        desktopFocusProvider: @escaping () -> ClaudeDesktopFocus? = { nil }
+    ) {
         self.selectedTTYProvider = selectedTTYProvider
+        self.desktopFocusProvider = desktopFocusProvider
     }
 
     public func isUserLookingAt(_ session: AgentSession) -> Bool {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // Asked only for a desktop or cloud session with the app in front,
+        // since it reads the app's log.
+        if session.isDesktopSession || session.isCloudSession {
+            let focus = frontmost == HostApplication.claudeDesktop.bundleIdentifier ? desktopFocusProvider() : nil
+            if let looking = ClaudeDesktop.isUserLooking(
+                at: session, frontmostBundleIdentifier: frontmost, focus: focus
+            ) {
+                return looking
+            }
+        }
         guard let bundleID = session.hostApplication.bundleIdentifier,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID
         else { return false }

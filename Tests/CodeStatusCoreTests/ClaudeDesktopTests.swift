@@ -244,6 +244,56 @@ struct ClaudeDesktopTests {
         #expect(ClaudeDesktop.continueURL(hostSessionID: "local_a&b") == nil)
     }
 
+    // MARK: - Holding back notifications for the session on screen
+
+    @Test("The last focus change in the app's log says which session is on screen")
+    func focusFromLog() {
+        let log = """
+        2026-11-27 01:07:51 [info] [CCD] LocalSessions.setFocusedSession: sessionId=local_3cd58d1d-9061-41ba-bc7e-bffa1c0a9c25
+        2026-11-27 01:08:08 [info] [CCD] LocalSessions.setFocusedSession: sessionId=session_01JRWGj6bZCxie3VMxVXXBin
+        2026-11-27 01:08:09 [info] handoff: publishing session_01JRWGj6bZCxie3VMxVXXBin
+
+        """
+        #expect(ClaudeDesktop.focus(inLog: log) == .session("session_01JRWGj6bZCxie3VMxVXXBin"))
+        #expect(ClaudeDesktop.focus(inLog: log + "x [CCD] LocalSessions.setFocusedSession: sessionId=null\n") == .nothing)
+        #expect(ClaudeDesktop.focus(inLog: "x LocalSessions.setFocusedSession: sessionId=../etc\n") == nil)
+        #expect(ClaudeDesktop.focus(inLog: "nothing here") == nil)
+    }
+
+    private var claudeApp: String? { HostApplication.claudeDesktop.bundleIdentifier }
+
+    @Test("With the app in front, only the session it shows is held back")
+    func onlyTheShownSession() throws {
+        var registry = SessionRegistry()
+        _ = registry.ingest(try desktop("1", "Stop"))
+        let session = try #require(registry[rowID])
+
+        #expect(ClaudeDesktop.isUserLooking(at: session, frontmostBundleIdentifier: claudeApp, focus: .session(host)) == true)
+        #expect(ClaudeDesktop.isUserLooking(
+            at: session, frontmostBundleIdentifier: claudeApp,
+            focus: .session("local_0bfa7851-9e71-4c3a-a921-82f4544940bd")
+        ) == false)
+        #expect(ClaudeDesktop.isUserLooking(at: session, frontmostBundleIdentifier: claudeApp, focus: .nothing) == false)
+        #expect(ClaudeDesktop.isUserLooking(at: session, frontmostBundleIdentifier: "com.apple.Terminal", focus: .session(host)) == false)
+        // The log could not tell: the app being in front decides, as before.
+        #expect(ClaudeDesktop.isUserLooking(at: session, frontmostBundleIdentifier: claudeApp, focus: nil) == true)
+    }
+
+    @Test("A cloud session on screen in the app is held back too; a terminal session is not judged here")
+    func cloudAndOthers() throws {
+        var registry = SessionRegistry()
+        let cloud = CloudSessionReader.Session(
+            id: "session_01Abc", title: nil, repository: nil, state: .busy, isUnread: true, updatedAt: nil
+        )
+        _ = registry.syncCloudSessions([cloud], now: Date())
+        let row = try #require(registry[SessionID.provider(.claudeCode, "session_01Abc")])
+        #expect(ClaudeDesktop.isUserLooking(at: row, frontmostBundleIdentifier: claudeApp, focus: .session("session_01Abc")) == true)
+        #expect(ClaudeDesktop.isUserLooking(at: row, frontmostBundleIdentifier: claudeApp, focus: nil) == false)
+
+        let terminal = AgentSession(id: SessionID("t"), provider: .claudeCode, now: Date(), sourceAdapter: "x")
+        #expect(ClaudeDesktop.isUserLooking(at: terminal, frontmostBundleIdentifier: claudeApp, focus: .nothing) == nil)
+    }
+
     // MARK: - The desktop app's record
 
     private func writeRecord(_ json: String, id: String? = nil) throws -> URL {

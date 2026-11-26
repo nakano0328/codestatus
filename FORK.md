@@ -43,6 +43,15 @@ ChatGPT の状態は Chrome 拡張 [chatgpt-unread](https://github.com/nakano032
 
 Claude Code は、動いているプロセスごとに `~/.claude/sessions/<pid>.json` を書いていて（`claude agents --json` が読むもの）、そこに今の状態（`busy` / `waiting` / `idle` / `shell`）がある。reconnecting の Claude Code の行は、10 秒ごとの巡回でこれを読んで状態を戻す（`ClaudeSessionFile`）。通知は出さない。ファイルが読めないとき（Codex を含む）は、これまでどおり次の hook を待つ。
 
+## 見ているセッションの通知だけ止める
+
+本家は「セッションのアプリが前面にあれば、そのセッションの通知は出さない」。デスクトップアプリは 1 つのウィンドウで全セッションを扱うので、そのままだと 1 つを読んでいるあいだ、ほかのセッションの通知まで止まっていた。
+
+- デスクトップアプリのログ（`~/Library/Logs/Claude/main.log`）の末尾から、最後の `LocalSessions.setFocusedSession: sessionId=…` を読み、今開いているセッションを知る（`local_…` / `session_…` / `null`）
+- アプリが前面にあり、そのセッションを開いているときだけ通知を止める。クラウドのセッションも同じ
+- ログで判断できないときは、デスクトップのセッションは本家どおり「アプリが前面なら止める」、クラウドのセッションは止めない
+- ログを読むのは、通知を出すかどうか決めるとき、しかもアプリが前面のときだけ
+
 ついでに直した本家側の不具合:
 
 - 再起動時の復元が `SessionRegistry.update` 経由で、既にある行しか置き換えないため何も戻っていなかった。`restore` を足した
