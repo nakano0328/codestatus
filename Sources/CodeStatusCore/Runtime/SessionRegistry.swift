@@ -368,6 +368,21 @@ public struct SessionRegistry: Sendable {
         return results
     }
 
+    /// Fork addition: settles a `reconnecting` session from the agent's own
+    /// record of what it is doing (see ``ClaudeSessionFile``).
+    ///
+    /// Not a transition: this is catching up on something that happened while
+    /// we were not looking, and announcing it would be the burst of stale
+    /// notifications the wake handling exists to prevent.
+    public mutating func reverify(_ id: SessionID, as state: AgentState, since: Date?, now: Date) -> [RegistryEvent] {
+        guard var session = sessions[id], session.state == .reconnecting, state.isActive else { return [] }
+        session.state = state
+        session.stateConfidence = .medium
+        session.stateChangedAt = since ?? now
+        sessions[id] = session
+        return [.sessionRefreshed(id)]
+    }
+
     /// Puts back sessions saved before a restart.
     ///
     /// ``update(_:)`` only replaces sessions that already exist, so restoring

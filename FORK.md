@@ -37,6 +37,12 @@ ChatGPT の状態は Chrome 拡張 [chatgpt-unread](https://github.com/nakano032
 - タイトルはメモリにだけ持ち、`sessions.json` には保存しない。クラウドの行自体も保存せず、再起動後は最初の巡回でキャッシュから作り直す
 - アプリの非公開の形式なので、アプリの更新で読めなくなることがある。その場合はクラウドの行が出なくなるだけで、他には影響しない
 
+## 再起動・スリープ復帰のあとの確かめ直し
+
+本家は、再起動やスリープ復帰のあと、すべての行を reconnecting にして次の hook を待つ。待機中のセッションは hook を送らないので、何時間でも reconnecting のままになっていた（本家では再起動時の復元が効いていなかったので、表に出ていなかった）。
+
+Claude Code は、動いているプロセスごとに `~/.claude/sessions/<pid>.json` を書いていて（`claude agents --json` が読むもの）、そこに今の状態（`busy` / `waiting` / `idle` / `shell`）がある。reconnecting の Claude Code の行は、10 秒ごとの巡回でこれを読んで状態を戻す（`ClaudeSessionFile`）。通知は出さない。ファイルが読めないとき（Codex を含む）は、これまでどおり次の hook を待つ。
+
 ついでに直した本家側の不具合:
 
 - 再起動時の復元が `SessionRegistry.update` 経由で、既にある行しか置き換えないため何も戻っていなかった。`restore` を足した

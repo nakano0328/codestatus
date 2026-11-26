@@ -326,6 +326,23 @@ final class SessionDaemon {
         }
     }
 
+    /// Settles Claude Code sessions left `reconnecting` by a restart or a wake,
+    /// from the status Claude Code keeps for each of its processes. A session
+    /// with no such record (Codex, or a file we cannot read) waits for its next
+    /// hook as before.
+    private func reverifyReconnecting() {
+        var results: [RegistryEvent] = []
+        for session in registry.all where session.state == .reconnecting && session.provider == .claudeCode {
+            guard let pid = session.pid,
+                  let file = ClaudeSessionFile.read(pid: pid, home: paths.home),
+                  file.describes(session),
+                  let state = file.state
+            else { continue }
+            results += registry.reverify(session.id, as: state, since: file.statusUpdatedAt, now: Date())
+        }
+        handle(results)
+    }
+
     /// Lets go of paused desktop sessions the user has caught up on.
     ///
     /// The desktop app stops a session's process on its own, and a stopped
@@ -583,6 +600,7 @@ final class SessionDaemon {
                 }
             case .sweepProcesses:
                 processWatcher?.sweep()
+                reverifyReconnecting()
                 // kqueue registrations die with the process that made them, so
                 // anything restored from a snapshot needs re-subscribing.
                 for session in registry.all where session.state.isActive {
@@ -617,7 +635,8 @@ final class SessionDaemon {
 
     private func saveSnapshot() {
         do {
-            try persistence.save(registry.all.filter { $0.state.isActive })
+            // Cloud rows are rebuilt from the desktop app's cache (fork addition).
+            try persistence.save(registry.all.filter { $0.state.isActive && !$0.isCloudSession })
         } catch {
             logger.error("snapshot save failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -632,6 +651,7 @@ final class SessionDaemon {
         if ticksSinceReap >= Self.reapInterval {
             ticksSinceReap = 0
             reapDeadSessions()
+            reverifyReconnecting()
             dropReadDesktopSessions()
             syncCloudSessions()
             drainSpoolIfNotEmpty()
